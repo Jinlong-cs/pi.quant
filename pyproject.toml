@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pi-quant"
+version = "0.1.0"
+description = "A reproducible quantization control plane for vision-language-action models."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10,<3.15"
+authors = [{ name = "Jinlong-cs" }]
+dependencies = [
+    "numpy>=1.26,<2.3",
+    "pydantic>=2,<3",
+    "PyYAML>=6,<7",
+]
+
+[project.optional-dependencies]
+modelopt = ["nvidia-modelopt==0.45.0", "requests>=2.31,<3", "huggingface-hub>=0.24,<1"]
+onnx = ["onnx>=1.17,<2", "onnxruntime>=1.20,<2"]
+dev = [
+    "build>=1.2,<2",
+    "mypy>=1.17,<2",
+    "pytest>=8,<9",
+    "ruff>=0.12,<0.13",
+    "types-PyYAML>=6,<7",
+]
+
+[project.scripts]
+piquant = "piquant.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Jinlong-cs/pi.quant"
+Repository = "https://github.com/Jinlong-cs/pi.quant"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 140
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"examples/*" = ["E402"]
+"tests/*" = ["E402"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src"]
+check_untyped_defs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+no_implicit_optional = true
+show_error_codes = true
+warn_return_any = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "modelopt: requires the optional NVIDIA ModelOpt dependency",
+    "ort: requires the optional ONNX Runtime dependencies",
+]

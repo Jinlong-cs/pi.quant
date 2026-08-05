@@ -1,0 +1,24 @@
+schema_version: 1
+plan_id: synthetic-flow-vla-int8
+backend: modelopt
+quant_format: int8
+representation: fake_quant
+module_include:
+  - vision.*
+  - language.*
+  - projector
+  - history_encoder
+  - action_encoder
+  - action_head
+module_exclude: []
+calibration:
+  schema_version: 1
+  dataset_id: synthetic-flow-vla
+  dataset_revision: local
+  sample_count: 16
+  seed: 11
+  stages: [approach, grasp, lift, place]
+  input_fields: [observation, language, history, noise, timestep]
+seed: 7
+capture_points: [vision, language, projector, history, action_hidden, action]
+timing_boundary: offline model forward only; no transfer, server, runtime, or closed loop

@@ -1,41 +1,64 @@
 # Architecture
 
-`pi.quant` is the control plane around a quantization backend. The model and
-calibration boundaries carry VLA semantics; the backend performs numerical
-optimization; the analyzer and evidence store preserve reproducibility.
+`pi.quant` is the control plane around quantization and numerical-debug tools.
+The model/data adapters carry VLA semantics, the backend generates one explicit
+candidate, and the analyzer/evidence layers preserve comparable results.
 
 ## Boundaries
 
 - `ModelAdapter` owns model-specific forward inputs, named modules, captures,
-  and action outputs.
+  and action outputs. `SemanticModelAdapter` adds stable module/capture IDs,
+  action schema, and fresh model construction.
+- `TorchQuantizableAdapter` is the narrow capability required by the ModelOpt
+  backend. JAX and ONNX adapters do not inherit Torch behavior.
 - `CalibrationProvider` owns deterministic observation/language/history/action
-  samples and stage distribution.
+  samples and stage distribution. `ManifestCalibrationProvider` exposes exact
+  sample lineage and a reproducible fingerprint.
 - `TaskLossProvider` owns a task-shaped offline loss such as flow-action MSE.
 - `QuantizationBackend` owns one explicit backend invocation and reports module
   coverage plus fake/real representation.
 - `NumericalAnalyzer` consumes named arrays, so PyTorch hooks and ORT outputs
-  share metrics without sharing runtime dependencies.
+  share metrics without sharing runtime dependencies. The streaming analyzer
+  retains paired distributions without retaining a full activation corpus.
 - `TaskEvaluator` owns the current offline evaluation boundary.
 - `EvidenceStore` persists structured evidence but cannot promote it.
 
-There is no automatic backend registry in v0.1. The caller chooses a concrete
-backend explicitly. This keeps optional packages lazy and prevents a recipe
-from silently changing compiler or runtime semantics.
+There is no automatic backend/model registry. The caller explicitly injects
+the adapter, providers, backend, analyzer, evaluator, and store. This prevents
+a recipe from silently changing model, dependency, precision, or runtime.
 
 ## Data flow
 
 ```text
-ModelSpec + OptimizationPlan + CalibrationSpec
+ModelSpec + ActionSchema + CalibrationManifest
                          |
-             adapter / calibration provider
+        semantic inventory + logical capture mapping
                          |
-                selected quant backend
+              chunked source FP golden
                          |
-            FP and candidate named captures
+ OptimizationPlan -> fresh model -> selected quant backend
                          |
-        tensor metrics + action metrics + evidence
+        streaming activation/flow/action diagnostics
+                         |
+       EvidenceRecord[] -> SensitivityStudyRecord
 ```
 
-The v0.1 reference QDQ backend is a portable test harness. ModelOpt is the
-first optional production-oriented backend; TensorRT and hardware-specific
-compiler work are future feature PRs.
+## Stable identities
+
+Recipes select semantic logical IDs such as `vlm.block.09.attention.q`; the
+adapter resolves them to current framework paths. Evidence records both forms,
+matched module/parameter counts, and exact enabled quantizers. A selector that
+matches zero modules fails before calibration.
+
+Every sensitivity candidate reloads the same immutable checkpoint. ModelOpt
+fake-quant mutation from one candidate cannot leak into another. The plan,
+trial, manifest, golden, candidate evidence, and artifact hashes are checked
+before a study can be validated.
+
+## Ownership boundary
+
+The reference QDQ backend remains a synthetic harness. ModelOpt is the first
+real candidate backend. ORT is a temporary-graph capture integration, not a
+quantizer. TensorRT compilation, target benchmark, pi.cpp runtime packaging,
+server/client operation, and real closed loop are later layers and do not
+belong to a v0.2 source/offline claim.

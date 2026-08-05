@@ -1,6 +1,7 @@
 import numpy as np
 
-from piquant.analysis import NumpyNumericalAnalyzer, compare_action, compare_tensor
+from piquant.analysis import NumpyNumericalAnalyzer, StreamingDiagnosticAnalyzer, compare_action, compare_tensor
+from piquant.contracts import ActionSchema
 
 
 def test_tensor_metrics_include_sqnr_and_cosine() -> None:
@@ -29,3 +30,26 @@ def test_named_analyzer_rejects_missing_capture() -> None:
         assert "missing tensors" in str(error)
     else:
         raise AssertionError("missing capture did not fail")
+
+
+def test_streaming_diagnostics_preserve_stage_timestep_and_horizon_axes() -> None:
+    schema = ActionSchema(
+        model_action_dim=7,
+        output_action_dim=7,
+        horizon=1,
+        denoise_steps=1,
+        translation_indices=[0, 1, 2],
+        rotation_indices=[3, 4, 5],
+        gripper_index=6,
+        postprocess="identity",
+    )
+    reference = {"hidden": np.ones((2, 3)), "action": np.ones((2, 1, 7))}
+    candidate = {"hidden": np.full((2, 3), 0.9), "action": np.full((2, 1, 7), 0.9)}
+    metadata = [{"stage": "early", "timestep": 1.0}, {"stage": "late", "timestep": 0.1}]
+    analyzer = StreamingDiagnosticAnalyzer(seed=3)
+    analyzer.add(reference, candidate, metadata, action_name="action", action_schema=schema)
+    diagnostics = analyzer.finalize()
+    assert diagnostics.overall.sample_count == 2
+    assert len(diagnostics.overall.action.horizon_l2) == 1
+    assert sorted(diagnostics.by_stage) == ["early", "late"]
+    assert sorted(diagnostics.by_timestep) == ["0.100", "1.000"]

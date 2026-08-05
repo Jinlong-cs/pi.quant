@@ -5,12 +5,21 @@ The optional backend pins `nvidia-modelopt==0.45.0` and imports
 public `mtq.quantize(model, config, forward_loop=...)` API and follows the
 ordered `quant_cfg` precedence documented by ModelOpt.
 
-Before calibration, pi.quant performs its own module-name accounting and fails
-on zero matches. ModelOpt quantizer coverage is recorded separately from
-pi.quant module selection. The result explicitly reports `fake_quant` or
-`real_quant`; a fake-quant model is never presented as a packed deployment
-checkpoint.
+Before calibration, pi.quant resolves semantic logical selectors to exact
+backend module paths and fails on zero matches. It first disables every
+ModelOpt quantizer, then enables only the input and weight quantizers for the
+resolved Linear modules. After calibration, the enabled set must equal exactly
+two quantizers per selected module; missing or unexpectedly enabled Conv,
+Embedding, norm, head, or other quantizers reject the candidate.
 
-The backend requires an adapter to expose `backend_model()` and
-`forward_backend()` for the selected framework. v0.1's portable synthetic path
-does not claim a GPU ModelOpt result when that optional environment is absent.
+Evidence includes candidate/matched/excluded modules and parameters, resolved
+backend paths, inserted and enabled quantizer names, num bits, axis, amax,
+scale, and pre-quant scale summaries. The backend currently requires
+`backend=modelopt`, `quant_format=int8`, and `representation=fake_quant`.
+ModelOpt fake quantization is never presented as a packed or target engine.
+
+The backend requires a `TorchQuantizableAdapter` to expose `backend_model()`,
+`forward_backend()`, and `with_backend_model()`. The adapter is rebuilt from
+the frozen checkpoint for every trial. If ModelOpt 0.45.0 or its explicit
+runtime is unavailable, the call fails; it does not fall back to reference
+QDQ, another precision, CPU, or synthetic data.

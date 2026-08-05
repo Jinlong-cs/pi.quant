@@ -11,7 +11,13 @@ import numpy as np
 
 from piquant import __version__, load_plan
 from piquant.analysis import NumpyNumericalAnalyzer
-from piquant.evidence import package_import_report, target_fingerprint
+from piquant.evidence import (
+    load_sensitivity_study,
+    package_import_report,
+    summarize_sensitivity_study,
+    target_fingerprint,
+    validate_sensitivity_study,
+)
 
 
 def _doctor(_args: argparse.Namespace) -> int:
@@ -48,6 +54,17 @@ def _compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _summarize_study(args: argparse.Namespace) -> int:
+    summary = summarize_sensitivity_study(load_sensitivity_study(args.study))
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def _validate_study(args: argparse.Namespace) -> int:
+    print(json.dumps(validate_sensitivity_study(args.study), indent=2, sort_keys=True))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="piquant", description="VLA quantization evidence tools")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -64,6 +81,14 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--candidate", required=True)
     compare.add_argument("--action-name", default="action")
     compare.set_defaults(handler=_compare)
+
+    summarize_study = subparsers.add_parser("summarize-study", help="summarize a sensitivity study without loading artifacts")
+    summarize_study.add_argument("study", type=Path)
+    summarize_study.set_defaults(handler=_summarize_study)
+
+    validate_study = subparsers.add_parser("validate-study", help="validate sensitivity study identity, hashes, and evidence lineage")
+    validate_study.add_argument("study", type=Path)
+    validate_study.set_defaults(handler=_validate_study)
     return parser
 
 

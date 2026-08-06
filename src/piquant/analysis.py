@@ -96,8 +96,8 @@ def compare_action(
     if gripper_index is not None:
         if gripper_index < 0 or gripper_index >= reference_array.shape[-1]:
             raise ValueError(f"gripper_index {gripper_index} is outside action dimension {reference_array.shape[-1]}")
-        reference_state = reference_array[:, gripper_index] > gripper_threshold
-        candidate_state = candidate_array[:, gripper_index] > gripper_threshold
+        reference_state = reference_array[..., gripper_index] > gripper_threshold
+        candidate_state = candidate_array[..., gripper_index] > gripper_threshold
         mismatch_rate = _safe_float(np.mean(reference_state != candidate_state))
     return ActionMetric(
         shape_match=True,

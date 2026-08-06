@@ -17,3 +17,10 @@ validation gates, evidence outputs, and promotion boundaries.
 
 The skills describe how to operate the library; they do not replace the
 versioned Python contracts or decide human acceptance.
+
+v0.3 adds the narrow temporal/WAM boundary. FastWAM is an explicit source
+adapter, not a universal model registry: semantic inventory, temporal axes,
+and execution callbacks are injected by the caller. Teacher-forced execution
+and world-latent capture are required only when a study claims those signals;
+missing source capabilities remain pending and cannot be replaced by synthetic
+or fabricated outputs.

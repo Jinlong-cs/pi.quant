@@ -4,12 +4,22 @@ from __future__ import annotations
 
 import hashlib
 import importlib.metadata
+import json
 import platform
 import sys
 from pathlib import Path
 from typing import Any
 
-from piquant.contracts import Contract, EvidenceRecord, GoldenCaptureManifest, SensitivityStudyRecord, TargetFingerprint, fingerprint
+from piquant.contracts import (
+    Contract,
+    EvidenceRecord,
+    GoldenCaptureManifest,
+    SensitivityStudyRecord,
+    TargetFingerprint,
+    TemporalGoldenCaptureManifest,
+    TemporalStudyRecord,
+    fingerprint,
+)
 
 
 def _sha256(path: str | Path) -> str:
@@ -65,6 +75,17 @@ def load_sensitivity_study(path: str | Path) -> SensitivityStudyRecord:
     return SensitivityStudyRecord.model_validate_json(Path(path).read_text(encoding="utf-8"))
 
 
+def load_temporal_study(path: str | Path) -> TemporalStudyRecord:
+    return TemporalStudyRecord.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
+
+def load_study(path: str | Path) -> SensitivityStudyRecord | TemporalStudyRecord:
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if data.get("evidence_boundary") == "source_offline_temporal":
+        return TemporalStudyRecord.model_validate(data)
+    return SensitivityStudyRecord.model_validate(data)
+
+
 def summarize_sensitivity_study(study: SensitivityStudyRecord) -> dict[str, Any]:
     return {
         "study_id": study.study_id,
@@ -80,15 +101,39 @@ def summarize_sensitivity_study(study: SensitivityStudyRecord) -> dict[str, Any]
     }
 
 
-def validate_sensitivity_study(path: str | Path) -> dict[str, Any]:
-    """Validate external artifact lineage without importing any optional runtime."""
+def summarize_temporal_study(study: TemporalStudyRecord) -> dict[str, Any]:
+    return {
+        "study_id": study.study_id,
+        "status": study.status,
+        "model_id": study.model.model_id,
+        "evidence_boundary": study.evidence_boundary,
+        "trial_count": len(study.trials),
+        "candidate_count": len(study.candidates),
+        "calibration_fingerprints": [study.calibration_manifest_fingerprint],
+        "static_control_fingerprint": study.static_control_manifest_fingerprint,
+        "holdout_fingerprint": study.holdout_manifest_fingerprint,
+        "promotion_reserved_fingerprint": study.promotion_reserved_manifest_fingerprint,
+        "ranking": [rank.model_dump(mode="json") for rank in study.ranking],
+        "calibration_ablation": [comparison.model_dump(mode="json") for comparison in study.calibration_ablation],
+    }
 
-    study = load_sensitivity_study(path)
+
+def summarize_study(study: SensitivityStudyRecord | TemporalStudyRecord) -> dict[str, Any]:
+    if isinstance(study, TemporalStudyRecord):
+        return summarize_temporal_study(study)
+    return summarize_sensitivity_study(study)
+
+
+def _validate_study_lineage(
+    study: SensitivityStudyRecord | TemporalStudyRecord,
+    golden_path: str | Path,
+    golden_type: type[GoldenCaptureManifest] | type[TemporalGoldenCaptureManifest],
+) -> dict[str, Any]:
     if len(study.trials) != len(study.candidates):
         raise ValueError("study must contain one candidate evidence reference per trial")
     if _sha256(study.golden_manifest.path) != study.golden_manifest.sha256:
         raise ValueError("golden manifest SHA256 differs from study reference")
-    golden = GoldenCaptureManifest.model_validate_json(Path(study.golden_manifest.path).read_text(encoding="utf-8"))
+    golden = golden_type.model_validate_json(Path(golden_path).read_text(encoding="utf-8"))
     if golden.model != study.model or golden.action_schema != study.action_schema:
         raise ValueError("golden model/action contract differs from study")
     if golden.holdout_manifest_fingerprint != study.holdout_manifest_fingerprint:
@@ -113,11 +158,36 @@ def validate_sensitivity_study(path: str | Path) -> dict[str, Any]:
             raise ValueError(f"quantized trial {candidate.trial_id!r} has zero module coverage")
         if record.quantization is None or record.quantization.module_coverage != record.module_coverage:
             raise ValueError(f"candidate quantization evidence is missing or inconsistent for trial {candidate.trial_id!r}")
-    return summarize_sensitivity_study(study)
+        if isinstance(study, TemporalStudyRecord) and not record.temporal_metrics:
+            raise ValueError(f"temporal candidate {candidate.trial_id!r} has no temporal metrics")
+    return summarize_study(study)
+
+
+def validate_sensitivity_study(path: str | Path) -> dict[str, Any]:
+    """Validate external artifact lineage without importing any optional runtime."""
+
+    study = load_sensitivity_study(path)
+    return _validate_study_lineage(study, study.golden_manifest.path, GoldenCaptureManifest)
+
+
+def validate_temporal_study(path: str | Path) -> dict[str, Any]:
+    """Validate temporal study artifacts without importing Torch or FastWAM."""
+
+    study = load_temporal_study(path)
+    return _validate_study_lineage(study, study.golden_manifest.path, TemporalGoldenCaptureManifest)
+
+
+def validate_study(path: str | Path) -> dict[str, Any]:
+    """Validate either the VLA or temporal study schema selected by its boundary."""
+
+    study = load_study(path)
+    if isinstance(study, TemporalStudyRecord):
+        return validate_temporal_study(path)
+    return validate_sensitivity_study(path)
 
 
 def package_import_report() -> dict[str, bool]:
     """Report discoverability only; this function intentionally imports nothing optional."""
 
-    modules = ("torch", "modelopt", "onnx", "onnxruntime")
+    modules = ("torch", "modelopt", "onnx", "onnxruntime", "openpi", "fastwam")
     return {module: module in sys.modules for module in modules}

@@ -96,6 +96,38 @@ boundary are in [examples/pi05_libero/README.md](examples/pi05_libero/README.md)
 A sensitivity study uses one immutable candidate directory per trial and fresh
 checkpoint weights for every fake-quant mutation.
 
+## v0.3 FastWAM temporal diagnostics
+
+v0.3 extends the same contracts to WAM sequences without turning a model's
+exporter names into universal rules:
+
+- `FastWAMSourceAdapter` exposes semantic module inventory and explicit backend
+  paths for the audited 33-frame, `[32,7]` action ABI;
+- `FastWAMCaptureRunner` hooks iterative source inference lazily and requires
+  injected callbacks for teacher-forced execution or world-latent capture;
+- temporal manifests enforce episode-disjoint splits and preserve stage,
+  timestep, denoise-step, action-horizon, seed, and flow-noise lineage;
+- streaming diagnostics separate teacher-forced and iterative modes and report
+  activation, flow, action, direction, gripper, stage, timestep, denoise-step,
+  and horizon metrics;
+- rollout divergence is reported as an explicit offline diagnostic and is not a
+  closed-loop success or deployment acceptance claim.
+
+The public FastWAM recipes are templates. Replace their external dataset
+identity and sample count with real manifests before running a study:
+
+```bash
+uv run piquant validate-plan recipes/fastwam/temporal-fp-control.yaml
+uv run piquant validate-plan recipes/fastwam/temporal-int8-broad.yaml
+```
+
+The complete adapter wiring is documented in
+[examples/fastwam_temporal/README.md](examples/fastwam_temporal/README.md).
+Real captures, model assets, experiment logs, and evidence remain under an
+external Task Contract artifact root. v0.3 source/offline evidence does not
+claim TensorRT, AGX, RTX 5090, server/client timing, full LIBERO promotion, or
+the historical five-node precision guard.
+
 ## Architecture
 
 ```text
@@ -117,6 +149,6 @@ repository coding policy copied from the project-level policy source.
 
 ## Roadmap
 
-The version sequence is intentionally serial. FastWAM temporal diagnostics,
-target compiler evidence, and mixed-precision promotion remain separate future
-feature PRs; see [docs/roadmap.md](docs/roadmap.md).
+The version sequence is intentionally serial. Target compiler evidence and
+mixed-precision promotion remain separate future feature PRs; see
+[docs/roadmap.md](docs/roadmap.md).

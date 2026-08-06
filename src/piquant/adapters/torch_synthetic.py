@@ -27,14 +27,15 @@ class TorchSyntheticFlowVLAAdapter:
             class FlowModel(nn.Module):
                 def __init__(self) -> None:
                     super().__init__()
-                    self.vision = nn.Module()
+                    self.vision: Any = nn.Module()
                     self.vision.patch_embedding = nn.Linear(4, 8)
-                    self.language = nn.Module()
+                    self.language: Any = nn.Module()
                     self.language.embedding = nn.Linear(4, 8)
                     self.projector = nn.Linear(16, 8)
                     self.history_encoder = nn.Linear(4, 8)
                     self.action_encoder = nn.Linear(21, 16)
                     self.action_head = nn.Linear(16, 6)
+                    self.activation = nn.ReLU()
 
                 def forward(self, batch: dict[str, Any]) -> dict[str, Any]:
                     observation = batch["observation"]
@@ -42,12 +43,12 @@ class TorchSyntheticFlowVLAAdapter:
                     history = batch["history"]
                     noise = batch["noise"]
                     timestep = batch["timestep"]
-                    vision = torch.relu(self.vision.patch_embedding(observation))
-                    language_hidden = torch.relu(self.language.embedding(language))
-                    projector = torch.relu(self.projector(torch.cat([vision, language_hidden], dim=-1)))
-                    history_hidden = torch.relu(self.history_encoder(history))
+                    vision = self.activation(self.vision.patch_embedding(observation))
+                    language_hidden = self.activation(self.language.embedding(language))
+                    projector = self.activation(self.projector(torch.cat([vision, language_hidden], dim=-1)))
+                    history_hidden = self.activation(self.history_encoder(history))
                     action_input = torch.cat([projector, history_hidden, noise, timestep], dim=-1)
-                    action_hidden = torch.relu(self.action_encoder(action_input))
+                    action_hidden = self.activation(self.action_encoder(action_input))
                     action = self.action_head(action_hidden)
                     return {
                         "vision": vision,

@@ -12,11 +12,11 @@ import numpy as np
 from piquant import __version__, load_plan
 from piquant.analysis import NumpyNumericalAnalyzer
 from piquant.evidence import (
-    load_sensitivity_study,
+    load_study,
     package_import_report,
-    summarize_sensitivity_study,
+    summarize_study,
     target_fingerprint,
-    validate_sensitivity_study,
+    validate_study,
 )
 
 
@@ -55,13 +55,13 @@ def _compare(args: argparse.Namespace) -> int:
 
 
 def _summarize_study(args: argparse.Namespace) -> int:
-    summary = summarize_sensitivity_study(load_sensitivity_study(args.study))
+    summary = summarize_study(load_study(args.study))
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 
 
 def _validate_study(args: argparse.Namespace) -> int:
-    print(json.dumps(validate_sensitivity_study(args.study), indent=2, sort_keys=True))
+    print(json.dumps(validate_study(args.study), indent=2, sort_keys=True))
     return 0
 
 

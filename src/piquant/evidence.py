@@ -189,5 +189,5 @@ def validate_study(path: str | Path) -> dict[str, Any]:
 def package_import_report() -> dict[str, bool]:
     """Report discoverability only; this function intentionally imports nothing optional."""
 
-    modules = ("torch", "modelopt", "onnx", "onnxruntime", "openpi", "fastwam")
+    modules = ("torch", "modelopt", "onnx", "onnxruntime", "openpi", "fastwam", "tensorrt")
     return {module: module in sys.modules for module in modules}

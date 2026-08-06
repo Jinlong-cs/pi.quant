@@ -67,3 +67,29 @@ fact to imply packed quantization.
 model, action, plan, trial, calibration, coverage, and status lineage. An Agent
 may write `measured`, `pending`, or `rejected` evidence. Only a human promotion
 owner can mark deployment evidence `accepted`.
+
+## Target compiler contracts
+
+- `TargetFingerprint` records the measured target environment: platform, Python,
+  device, GPU, compute capability, driver, CUDA, TensorRT, memory, power/clocks
+  and container identity. Unknown values remain explicit strings rather than
+  inferred support.
+- `TargetCapability` records one capability probe such as INT8, FP8, NVFP4,
+  QDQ parser support, DLA coverage or profiling availability. `unsupported`
+  and `pending` capabilities require a reason code.
+- `CompilationPlan` is a versioned YAML/JSON schema for one target compiler
+  invocation. It binds an ONNX artifact hash, target, precision, shape profiles,
+  TensorRT builder options, timing cache, flags and timing boundary.
+- `OperatorGraphReport` is source/export graph evidence only. Node counts and
+  constant-weight candidates are not FLOP, latency or success claims.
+- `CompilerEvidenceRecord` is one build attempt. `unsupported`, `pending` and
+  `rejected` records are valid evidence only with reason codes; `measured`
+  records must point to hashed artifacts.
+- `BenchmarkProtocol` and `StageTimingReport` separate build, engine-stage,
+  standalone, server inference, client roundtrip and closed-loop timing. A
+  measured timing report requires latency distribution.
+- `DeploymentCandidateManifest` is the pi.cpp handoff document. It carries
+  model/recipe/calibration lineage, ABI, compiler records, timing records,
+  precision map and integration status. `status=accepted` requires explicit
+  `human_acceptance=accepted`; agents cannot promote by writing machine
+  evidence.

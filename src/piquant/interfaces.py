@@ -7,15 +7,21 @@ from typing import Any, Protocol, runtime_checkable
 
 from piquant.contracts import (
     ActionSchema,
+    BenchmarkProtocol,
     CalibrationManifest,
     CaptureSpec,
     ComparisonReport,
+    CompilationPlan,
+    CompiledArtifactRef,
+    CompilerEvidenceRecord,
+    DeploymentCandidateManifest,
     ModelSpec,
     ModuleCoverage,
     ModuleDescriptor,
     OptimizationPlan,
     QuantizationResult,
     SensitivityDiagnostics,
+    StageTimingReport,
     TemporalCalibrationManifest,
     TemporalCaptureSpec,
     TemporalMetricReport,
@@ -173,6 +179,26 @@ class EvidenceStore(Protocol):
     """Persist machine-readable evidence without deciding human promotion."""
 
     def write(self, record: Any, path: str) -> None: ...
+
+
+class CompilerBackend(Protocol):
+    """Compile one frozen candidate artifact for one explicit target."""
+
+    name: str
+
+    def compile(self, plan: CompilationPlan, model: ModelSpec) -> CompilerEvidenceRecord: ...
+
+
+class DeploymentEvaluator(Protocol):
+    """Measure a compiled artifact without deciding acceptance."""
+
+    def benchmark(self, artifact: CompiledArtifactRef, protocol: BenchmarkProtocol) -> StageTimingReport: ...
+
+
+class DeploymentManifestBuilder(Protocol):
+    """Build a pi.cpp handoff manifest from measured evidence."""
+
+    def build(self, manifest: DeploymentCandidateManifest) -> DeploymentCandidateManifest: ...
 
 
 AdapterFactory = Callable[[], SemanticModelAdapter]

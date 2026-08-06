@@ -128,6 +128,48 @@ external Task Contract artifact root. v0.3 source/offline evidence does not
 claim TensorRT, AGX, RTX 5090, server/client timing, full LIBERO promotion, or
 the historical five-node precision guard.
 
+## v0.4 target compiler evidence
+
+v0.4 adds the deployment evidence layer between source-level quantization and
+pi.cpp runtime promotion:
+
+- `CompilationPlan` describes one frozen ONNX candidate, one target fingerprint,
+  one precision mode, shape profiles, TensorRT builder flags, and timing
+  boundary;
+- `TensorRTCliCompiler` is an optional CLI integration around target-local
+  `trtexec`; if `trtexec` is absent it returns structured `unsupported`
+  evidence instead of falling back;
+- ONNX inspection reports operators, initializers, dtype counts, external data,
+  and constant-weight Conv/Gemm/MatMul candidates without making latency claims;
+- TensorRT layer inspection records dtype, Q/DQ, reformat/copy, fusion and
+  tactic counts from `--exportLayerInfo`;
+- `BenchmarkProtocol`, `StageTimingReport`, and
+  `DeploymentCandidateManifest` keep engine-stage, standalone, server/client,
+  closed-loop, pi.cpp handoff, and human acceptance separate.
+
+Validate public templates and render a target command without running hardware:
+
+```bash
+uv run piquant validate-compilation-plan recipes/deployment/agx-orin-tensorrt-int8.yaml
+uv run piquant trtexec-command recipes/deployment/agx-orin-tensorrt-int8.yaml \
+  --engine /external/artifacts/candidate.engine \
+  --layer-info /external/artifacts/candidate.layers.json
+```
+
+Run compilation only inside an authorized target environment:
+
+```bash
+uv run piquant compile-tensorrt recipes/deployment/agx-orin-tensorrt-int8.yaml \
+  --output-dir /external/artifacts/agx-build \
+  --model-id fastwam --family wam --framework onnx --task wam \
+  --action-dim 7 --action-horizon 32
+uv run piquant inspect-trt-layers /external/artifacts/agx-build/agx-orin-tensorrt-int8-template.layers.json
+```
+
+The current AGX/RTX 5090 hardware build gates remain pending until target
+storage, ownership, TensorRT environment, parity and benchmark protocols are
+verified. Capability probes are not performance results.
+
 ## Architecture
 
 ```text
@@ -143,12 +185,12 @@ ModelAdapter + CalibrationProvider + semantic inventory
 ```
 
 Read [docs/architecture.md](docs/architecture.md), [docs/contracts.md](docs/contracts.md),
-and [docs/modelopt-backend.md](docs/modelopt-backend.md) for the public
-boundaries. Agent workflows live under `.agents/`; the root `AGENTS.md` is the
-repository coding policy copied from the project-level policy source.
+[docs/modelopt-backend.md](docs/modelopt-backend.md), and
+[docs/target-compiler.md](docs/target-compiler.md) for the public boundaries.
+Agent workflows live under `.agents/`; the root `AGENTS.md` is the repository
+coding policy copied from the project-level policy source.
 
 ## Roadmap
 
-The version sequence is intentionally serial. Target compiler evidence and
-mixed-precision promotion remain separate future feature PRs; see
-[docs/roadmap.md](docs/roadmap.md).
+The version sequence is intentionally serial. Mixed-precision promotion remains
+a separate future feature PR; see [docs/roadmap.md](docs/roadmap.md).

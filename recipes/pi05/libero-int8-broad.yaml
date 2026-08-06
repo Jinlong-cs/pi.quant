@@ -1,0 +1,57 @@
+schema_version: 1
+plan_id: pi05-libero-int8-broad
+backend: modelopt
+quant_format: int8
+representation: fake_quant
+module_include:
+  - vision.block.*
+  - vlm.block.*
+  - projector.*
+  - action.block.*
+  - action.input
+  - time_embedding.*
+module_exclude: []
+calibration:
+  schema_version: 1
+  dataset_id: physical-intelligence/libero
+  dataset_revision: 95f233e157ca2cc495d28a4fea126eaf3169655a1cd489de22bdcb4baedfc651
+  sample_count: 160
+  seed: 20260805
+  stages: [early, pre_gripper_transition, post_gripper_transition, late]
+  input_fields: [images, state, language, flow_noise, timestep]
+seed: 20260805
+capture_points:
+  - vision.patch_embedding
+  - vision.block.00.output
+  - vision.block.13.output
+  - vision.block.26.output
+  - projector.output
+  - vlm.embedding
+  - vlm.block.00.output
+  - vlm.block.09.output
+  - vlm.block.17.output
+  - prefix.block.00.k_projection
+  - prefix.block.00.v_projection
+  - prefix.block.17.k_projection
+  - prefix.block.17.v_projection
+  - action.input
+  - time_embedding.output
+  - action.block.00.output
+  - action.block.09.output
+  - action.block.17.output
+  - flow.step.00
+  - flow.step.01
+  - flow.step.02
+  - flow.step.03
+  - flow.step.04
+  - flow.step.05
+  - flow.step.06
+  - flow.step.07
+  - flow.step.08
+  - flow.step.09
+  - flow.selected
+  - action.normalized
+  - action.output
+  - gripper.normalized
+  - gripper.output
+timing_boundary: source/offline numerical diagnostics; no target latency

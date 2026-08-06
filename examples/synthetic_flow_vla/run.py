@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -41,16 +40,17 @@ def run(recipe: Path, output_dir: Path) -> EvidenceRecord:
     calibration = SyntheticCalibrationProvider(plan.calibration.sample_count, plan.calibration.seed)
     golden_adapter: object = SyntheticFlowVLAAdapter(plan.seed)
     candidate_adapter: object
-    modelopt_available = importlib.util.find_spec("modelopt") is not None and importlib.util.find_spec("torch") is not None
-    if plan.backend == "modelopt" and modelopt_available:
+    if plan.backend == "modelopt":
         golden_torch_adapter = TorchSyntheticFlowVLAAdapter(plan.seed)
         modelopt_adapter = TorchSyntheticFlowVLAAdapter(plan.seed)
         quantized_model, quantization = ModelOptBackend().quantize(modelopt_adapter, plan, calibration)
         golden_adapter = golden_torch_adapter
-        candidate_adapter = modelopt_adapter.with_model(quantized_model)
-    else:
+        candidate_adapter = modelopt_adapter.with_backend_model(quantized_model)
+    elif plan.backend == "reference_qdq":
         reference_adapter = SyntheticFlowVLAAdapter(plan.seed)
         candidate_adapter, quantization = ReferenceQDQBackend().quantize(reference_adapter, plan, calibration)
+    else:
+        raise ValueError(f"unsupported synthetic backend {plan.backend!r}")
     batches = calibration.batches()
     golden = _captures(golden_adapter, batches, plan.capture_points)
     candidate = _captures(candidate_adapter, batches, plan.capture_points)
@@ -68,7 +68,7 @@ def run(recipe: Path, output_dir: Path) -> EvidenceRecord:
         if quantization.backend == "modelopt"
         else [
             "reference_qdq is a portable numerical harness, not a ModelOpt or deployment result",
-            "ModelOpt optional integration was unavailable for this run",
+            "The recipe explicitly selected reference_qdq",
         ]
     )
     record = EvidenceRecord(
@@ -81,6 +81,7 @@ def run(recipe: Path, output_dir: Path) -> EvidenceRecord:
         representation=quantization.representation,
         calibration_fingerprint=calibration.fingerprint,
         module_coverage=quantization.module_coverage,
+        quantization=quantization,
         comparison=comparison,
         artifacts=[
             ArtifactRef(kind="golden-capture", path=str(golden_path), sha256=_sha256(golden_path)),

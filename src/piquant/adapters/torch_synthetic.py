@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
 
-from piquant.contracts import ModelSpec
+from piquant.contracts import ActionSchema, CaptureSpec, ModelSpec, ModuleDescriptor
 
 
 class TorchSyntheticFlowVLAAdapter:
@@ -19,6 +20,7 @@ class TorchSyntheticFlowVLAAdapter:
         except ModuleNotFoundError as error:
             raise RuntimeError("TorchSyntheticFlowVLAAdapter requires torch") from error
 
+        self.seed = seed
         torch.manual_seed(seed)
         if model is None:
 
@@ -75,14 +77,69 @@ class TorchSyntheticFlowVLAAdapter:
             name: module for name, module in self.model.named_modules() if name and hasattr(module, "weight") and hasattr(module, "bias")
         }
 
+    @property
+    def action_schema(self) -> ActionSchema:
+        return ActionSchema(
+            model_action_dim=6,
+            output_action_dim=6,
+            horizon=1,
+            denoise_steps=1,
+            translation_indices=[0, 1, 2],
+            rotation_indices=[3, 4],
+            gripper_index=5,
+            gripper_threshold=0.5,
+            postprocess="synthetic_identity",
+        )
+
+    def module_inventory(self) -> list[ModuleDescriptor]:
+        components = {
+            "vision.patch_embedding": "vision",
+            "language.embedding": "language",
+            "projector": "projector",
+            "history_encoder": "history",
+            "action_encoder": "action_backbone",
+            "action_head": "action_head",
+        }
+        return [
+            ModuleDescriptor(
+                logical_id=name,
+                backend_path=name,
+                component=components[name],
+                op_family="linear",
+                parameter_count=sum(parameter.numel() for parameter in module.parameters(recurse=False)),
+                quantizable=True,
+            )
+            for name, module in self.named_modules().items()
+        ]
+
+    def capture_specs(self) -> list[CaptureSpec]:
+        components = {
+            "vision": "vision",
+            "language": "language",
+            "projector": "projector",
+            "history": "history",
+            "action_hidden": "action_backbone",
+            "action": "action_head",
+        }
+        return [
+            CaptureSpec(logical_id=name, backend_path=name, component=component, kind="action" if name == "action" else "activation")
+            for name, component in components.items()
+        ]
+
+    def fresh(self) -> TorchSyntheticFlowVLAAdapter:
+        return TorchSyntheticFlowVLAAdapter(seed=self.seed)
+
     def backend_model(self) -> Any:
         return self.model
 
+    def with_backend_model(self, model: Any) -> TorchSyntheticFlowVLAAdapter:
+        return TorchSyntheticFlowVLAAdapter(seed=self.seed, model=model)
+
     def with_model(self, model: Any) -> TorchSyntheticFlowVLAAdapter:
-        return TorchSyntheticFlowVLAAdapter(model=model)
+        return self.with_backend_model(model)
 
     @staticmethod
-    def _tensor_batch(batch: dict[str, Any]) -> dict[str, Any]:
+    def _tensor_batch(batch: Mapping[str, Any]) -> dict[str, Any]:
         import torch
 
         return {
@@ -91,13 +148,13 @@ class TorchSyntheticFlowVLAAdapter:
             if name != "stage" and name != "target_action"
         }
 
-    def forward_backend(self, model: Any, batch: dict[str, Any]) -> None:
+    def forward_backend(self, model: Any, batch: Mapping[str, Any]) -> None:
         import torch
 
         with torch.no_grad():
             model(self._tensor_batch(batch))
 
-    def forward(self, batch: dict[str, Any], capture_points: list[str] | tuple[str, ...]) -> dict[str, np.ndarray]:
+    def forward(self, batch: Mapping[str, Any], capture_points: Sequence[str]) -> dict[str, np.ndarray]:
         import torch
 
         with torch.no_grad():

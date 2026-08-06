@@ -1,3 +1,30 @@
+# Repository First Principles
+
+## Authority
+
+* Read this file before editing, staging, committing, or opening/updating a pull request in this repository.
+* Treat these repository boundaries as the first review gate. A working experiment is not automatically suitable repository
+  content.
+* Keep the public repository focused on reusable quantization functionality, stable contracts, and concise user-facing
+  documentation.
+
+## Commit And Pull Request Boundary
+
+* Commit only reusable product code, versioned contracts, public recipes, concise documentation, and the minimum stable tests
+  needed to protect public behavior.
+* Every committed test must name a stable public contract or regression that it protects. Keep it deterministic, small, offline,
+  and independent of private models, datasets, hardware, and experiment artifacts.
+* Do not commit temporary test scripts, probes, experiment matrices, hardware runners, benchmark harnesses, debugging captures,
+  generated outputs, or one-off validation code. Keep them in the external Task Contract artifact root.
+* Do not commit experiment records as examples, including model-identity JSON files containing local paths, checkpoint or
+  normalization hashes, machine-specific settings, or accepted-asset identities.
+* Examples must demonstrate a reusable public API. They must not encode one internal experiment, machine, checkpoint package, or
+  evaluation result.
+* Keep datasets, checkpoints, ONNX files, engines, captures, traces, logs, videos, credentials, and large generated evidence
+  outside Git.
+* Before staging, audit the complete diff and remove files that do not satisfy this boundary. Stage explicit paths; do not use an
+  unaudited `git add .`.
+
 # Coding Style
 
 ## Fail Fast
@@ -33,4 +60,5 @@
 
 ## General Principle
 
-When choosing between defensive and simple code, prefer the simpler solution. We value correctness, clarity, and fast failure over robustness against impossible states.
+When choosing between defensive and simple code, prefer the simpler solution. We value correctness, clarity, and fast failure over
+robustness against impossible states.

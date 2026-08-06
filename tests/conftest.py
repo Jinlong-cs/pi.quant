@@ -40,6 +40,7 @@ def synthetic_record() -> EvidenceRecord:
         representation=result.representation,
         calibration_fingerprint=calibration.fingerprint,
         module_coverage=result.module_coverage,
+        quantization=result,
         comparison=NumpyNumericalAnalyzer(gripper_index=5).compare(reference, values, "action"),
         timing_boundary="offline",
         notes=[fingerprint(plan)],

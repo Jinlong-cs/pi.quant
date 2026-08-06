@@ -54,6 +54,87 @@ class ActionSchema(Contract):
         return self
 
 
+TemporalSplit = Literal["calibration", "diagnostic_holdout", "static_control", "promotion_reserved"]
+TemporalMode = Literal["teacher_forced", "iterative"]
+
+
+class SequenceRef(Contract):
+    """Identity-bound temporal sample used by WAM calibration and diagnostics."""
+
+    schema_version: Literal[1] = 1
+    sequence_id: str = Field(min_length=1)
+    split: TemporalSplit
+    suite: str = Field(min_length=1)
+    task: str = Field(min_length=1)
+    task_index: int = Field(ge=0)
+    episode_index: int = Field(ge=0)
+    frame_start: int = Field(ge=0)
+    frame_end: int = Field(gt=0)
+    observation_indices: list[int] = Field(min_length=1)
+    camera_keys: list[str] = Field(min_length=1)
+    instruction_sha256: str = Field(min_length=64, max_length=64)
+    action_target_sha256: str = Field(min_length=64, max_length=64)
+    normalization_revision: str = Field(min_length=1)
+    stage: str = Field(min_length=1)
+    source_path: str = Field(min_length=1)
+    source_sha256: str = Field(min_length=64, max_length=64)
+    seed: int
+    flow_noise_seed: int
+    timestep_schedule: list[float] = Field(min_length=1)
+    denoise_steps: int = Field(gt=0)
+    action_horizon: int = Field(gt=0)
+    action_dim: int = Field(gt=0)
+    sampling_mode: Literal["temporal_balanced", "static_frame"]
+
+    @model_validator(mode="after")
+    def validate_temporal_window(self) -> SequenceRef:
+        if self.frame_end <= self.frame_start:
+            raise ValueError("frame_end must be greater than frame_start")
+        if self.observation_indices != sorted(set(self.observation_indices)):
+            raise ValueError("observation_indices must be sorted and unique")
+        if any(index < self.frame_start or index >= self.frame_end for index in self.observation_indices):
+            raise ValueError("observation_indices must be inside [frame_start, frame_end)")
+        if any(timestep < 0.0 or timestep > 1.0 for timestep in self.timestep_schedule):
+            raise ValueError("timestep_schedule values must be inside [0, 1]")
+        if len(self.timestep_schedule) != self.denoise_steps:
+            raise ValueError("timestep_schedule length must equal denoise_steps")
+        return self
+
+
+class TemporalCalibrationManifest(Contract):
+    """Episode-aware sequence manifest with an explicit calibration sampling mode."""
+
+    schema_version: Literal[1] = 1
+    manifest_id: str = Field(min_length=1)
+    dataset_id: str = Field(min_length=1)
+    dataset_revision: str = Field(min_length=1)
+    split: TemporalSplit
+    preprocess_revision: str = Field(min_length=1)
+    normalization_revision: str = Field(min_length=1)
+    stage_rule: str = Field(min_length=1)
+    sampling_mode: Literal["temporal_balanced", "static_frame"]
+    denoise_steps: int = Field(gt=0)
+    action_horizon: int = Field(gt=0)
+    sequences: list[SequenceRef] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_sequences(self) -> TemporalCalibrationManifest:
+        sequence_ids = [sequence.sequence_id for sequence in self.sequences]
+        if len(sequence_ids) != len(set(sequence_ids)):
+            raise ValueError("temporal manifest sequence_id values must be unique")
+        if any(sequence.split != self.split for sequence in self.sequences):
+            raise ValueError("sequence split must match temporal manifest split")
+        if any(sequence.normalization_revision != self.normalization_revision for sequence in self.sequences):
+            raise ValueError("sequence normalization revision must match temporal manifest")
+        if any(sequence.sampling_mode != self.sampling_mode for sequence in self.sequences):
+            raise ValueError("sequence sampling mode must match temporal manifest")
+        if any(sequence.denoise_steps != self.denoise_steps for sequence in self.sequences):
+            raise ValueError("sequence denoise steps must match temporal manifest")
+        if any(sequence.action_horizon != self.action_horizon for sequence in self.sequences):
+            raise ValueError("sequence action horizon must match temporal manifest")
+        return self
+
+
 class ModuleDescriptor(Contract):
     schema_version: Literal[1] = 1
     logical_id: str = Field(min_length=1)
@@ -74,6 +155,27 @@ class CaptureSpec(Contract):
     kind: Literal["activation", "cache", "flow", "action", "gripper"]
     block_index: int | None = Field(default=None, ge=0)
     output_index: int | None = Field(default=None, ge=0)
+
+
+class TemporalCaptureSpec(Contract):
+    """Named WAM capture with explicit tensor axes and execution mode."""
+
+    schema_version: Literal[1] = 1
+    logical_id: str = Field(min_length=1)
+    backend_path: str = Field(min_length=1)
+    component: str = Field(min_length=1)
+    kind: Literal["activation", "cache", "latent", "flow", "action", "gripper", "rollout"]
+    axes: list[str] = Field(min_length=1)
+    mode: Literal["teacher_forced", "iterative", "both"] = "both"
+    block_index: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_axes(self) -> TemporalCaptureSpec:
+        if len(self.axes) != len(set(self.axes)):
+            raise ValueError("temporal capture axes must be unique")
+        if self.axes[0] != "batch":
+            raise ValueError("temporal capture axes must place batch first")
+        return self
 
 
 class SampleRef(Contract):
@@ -258,6 +360,70 @@ class ActionMetricSummary(Contract):
     horizon_l2: list[MetricDistribution] = Field(default_factory=list)
 
 
+class TemporalMetricReport(Contract):
+    """Streaming numerical summary for one explicitly-axis-labelled temporal capture."""
+
+    schema_version: Literal[1] = 1
+    capture_id: str = Field(min_length=1)
+    kind: Literal["activation", "cache", "latent", "flow", "action", "gripper", "rollout"]
+    mode: TemporalMode
+    axes: list[str] = Field(min_length=1)
+    sample_count: int = Field(gt=0)
+    tensor: TensorMetricSummary | None = None
+    action: ActionMetricSummary | None = None
+    by_denoise_step: dict[str, MetricDistribution] = Field(default_factory=dict)
+    by_rollout_horizon: dict[str, MetricDistribution] = Field(default_factory=dict)
+    by_stage: dict[str, MetricDistribution] = Field(default_factory=dict)
+    by_timestep: dict[str, MetricDistribution] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_metric_payload(self) -> TemporalMetricReport:
+        if (self.tensor is None) == (self.action is None):
+            raise ValueError("temporal metric report requires exactly one tensor or action summary")
+        if len(self.axes) != len(set(self.axes)) or self.axes[0] != "batch":
+            raise ValueError("temporal metric report axes must be unique and place batch first")
+        return self
+
+
+class RolloutDivergenceReport(Contract):
+    """Action/world drift across an explicitly labelled rollout boundary."""
+
+    schema_version: Literal[1] = 1
+    report_id: str = Field(min_length=1)
+    mode: TemporalMode
+    sample_count: int = Field(gt=0)
+    shape_match: bool
+    finite: bool
+    action_capture_id: str = Field(min_length=1)
+    latent_capture_ids: list[str] = Field(default_factory=list)
+    rollout_horizon_steps: list[int] = Field(min_length=1)
+    latent_horizon_steps: list[int] = Field(default_factory=list)
+    exceedance_threshold: float = Field(ge=0.0)
+    exceedance_rate: float = Field(ge=0.0, le=1.0)
+    action_l2_by_horizon: dict[str, MetricDistribution] = Field(default_factory=dict)
+    action_direction_by_horizon: dict[str, MetricDistribution] = Field(default_factory=dict)
+    latent_relative_l2_by_horizon: dict[str, MetricDistribution] = Field(default_factory=dict)
+    first_exceedance_horizon: MetricDistribution | None = None
+
+    @model_validator(mode="after")
+    def validate_horizons(self) -> RolloutDivergenceReport:
+        for name, steps in (("rollout", self.rollout_horizon_steps), ("latent", self.latent_horizon_steps)):
+            if steps != sorted(set(steps)) or any(step < 0 for step in steps):
+                raise ValueError(f"{name} horizon steps must be sorted, unique, and non-negative")
+        rollout_allowed = {str(step) for step in self.rollout_horizon_steps}
+        rollout_distributions = (
+            ("action_l2_by_horizon", self.action_l2_by_horizon),
+            ("action_direction_by_horizon", self.action_direction_by_horizon),
+        )
+        for name, values in rollout_distributions:
+            if unknown := sorted(set(values) - rollout_allowed):
+                raise ValueError(f"{name} contains undeclared rollout horizons: {unknown!r}")
+        latent_allowed = {str(step) for step in self.latent_horizon_steps}
+        if unknown := sorted(set(self.latent_relative_l2_by_horizon) - latent_allowed):
+            raise ValueError(f"latent_relative_l2_by_horizon contains undeclared latent horizons: {unknown!r}")
+        return self
+
+
 class DiagnosticBucket(Contract):
     schema_version: Literal[1] = 1
     sample_count: int = Field(ge=0)
@@ -382,6 +548,34 @@ class GoldenCaptureManifest(Contract):
         return self
 
 
+class TemporalGoldenCaptureManifest(Contract):
+    schema_version: Literal[1] = 1
+    manifest_id: str = Field(min_length=1)
+    model: ModelSpec
+    action_schema: ActionSchema
+    holdout_manifest_fingerprint: str = Field(min_length=64, max_length=64)
+    capture_specs: list[TemporalCaptureSpec] = Field(min_length=1)
+    chunks: list[CaptureChunkRef] = Field(min_length=1)
+    modes: list[TemporalMode] = Field(min_length=1)
+    seed: int
+    status: Literal["measured", "rejected"]
+
+    @model_validator(mode="after")
+    def validate_capture_lineage(self) -> TemporalGoldenCaptureManifest:
+        capture_ids = [capture.logical_id for capture in self.capture_specs]
+        if len(capture_ids) != len(set(capture_ids)):
+            raise ValueError("temporal golden capture logical IDs must be unique")
+        if self.modes != sorted(set(self.modes)):
+            raise ValueError("temporal golden modes must be sorted and unique")
+        chunk_ids = [chunk.chunk_id for chunk in self.chunks]
+        if len(chunk_ids) != len(set(chunk_ids)):
+            raise ValueError("temporal golden chunk IDs must be unique")
+        sequence_ids = [sequence_id for chunk in self.chunks for sequence_id in chunk.sample_ids]
+        if len(sequence_ids) != len(set(sequence_ids)):
+            raise ValueError("temporal golden sequence IDs must be unique across chunks")
+        return self
+
+
 class EvidenceRecord(Contract):
     schema_version: Literal[1] = 1
     record_id: str = Field(min_length=1)
@@ -401,6 +595,8 @@ class EvidenceRecord(Contract):
     notes: list[str] = Field(default_factory=list)
     trial: SensitivityTrial | None = None
     diagnostics: SensitivityDiagnostics | None = None
+    temporal_metrics: list[TemporalMetricReport] = Field(default_factory=list)
+    rollout_divergence: list[RolloutDivergenceReport] = Field(default_factory=list)
     evaluation: dict[str, float] = Field(default_factory=dict)
 
 
@@ -453,6 +649,54 @@ class SensitivityStudyRecord(Contract):
         fingerprints = self.calibration_manifest_fingerprints or [self.calibration_manifest_fingerprint]
         if self.calibration_manifest_fingerprint not in fingerprints:
             raise ValueError("primary calibration fingerprint must be included in calibration_manifest_fingerprints")
+        return self
+
+
+class TemporalStudyRecord(Contract):
+    schema_version: Literal[1] = 1
+    study_id: str = Field(min_length=1)
+    status: Literal["pending", "measured", "rejected"]
+    model: ModelSpec
+    action_schema: ActionSchema
+    module_inventory_sha256: str = Field(min_length=64, max_length=64)
+    calibration_manifest_fingerprint: str = Field(min_length=64, max_length=64)
+    static_control_manifest_fingerprint: str | None = Field(default=None, min_length=64, max_length=64)
+    holdout_manifest_fingerprint: str = Field(min_length=64, max_length=64)
+    promotion_reserved_manifest_fingerprint: str = Field(min_length=64, max_length=64)
+    golden_manifest: ArtifactRef
+    capture_specs: list[TemporalCaptureSpec] = Field(min_length=1)
+    trials: list[SensitivityTrial] = Field(min_length=1)
+    candidates: list[CandidateEvidenceRef] = Field(default_factory=list)
+    ranking: list[SensitivityRank] = Field(default_factory=list)
+    calibration_ablation: list[CalibrationAblation] = Field(default_factory=list)
+    evidence_boundary: Literal["source_offline_temporal"] = "source_offline_temporal"
+    notes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_lineage(self) -> TemporalStudyRecord:
+        trial_ids = [trial.trial_id for trial in self.trials]
+        if len(trial_ids) != len(set(trial_ids)):
+            raise ValueError("temporal study trial IDs must be unique")
+        candidate_trial_ids = [candidate.trial_id for candidate in self.candidates]
+        if len(candidate_trial_ids) != len(set(candidate_trial_ids)):
+            raise ValueError("temporal study candidate trial IDs must be unique")
+        if unknown := sorted(set(candidate_trial_ids) - set(trial_ids)):
+            raise ValueError(f"temporal study candidates reference unknown trials: {unknown!r}")
+        record_ids = [candidate.record_id for candidate in self.candidates]
+        if len(record_ids) != len(set(record_ids)):
+            raise ValueError("temporal study candidate record IDs must be unique")
+        if unknown := sorted({rank.evidence_record_id for rank in self.ranking} - set(record_ids)):
+            raise ValueError(f"temporal ranking references unknown evidence records: {unknown!r}")
+        capture_ids = [capture.logical_id for capture in self.capture_specs]
+        if len(capture_ids) != len(set(capture_ids)):
+            raise ValueError("temporal study capture IDs must be unique")
+        calibration_trial_ids = {
+            trial_id for comparison in self.calibration_ablation for trial_id in (comparison.baseline_trial_id, comparison.control_trial_id)
+        }
+        if unknown := sorted(calibration_trial_ids - set(trial_ids)):
+            raise ValueError(f"temporal calibration ablation references unknown trials: {unknown!r}")
+        if self.calibration_ablation and self.static_control_manifest_fingerprint is None:
+            raise ValueError("temporal calibration ablation requires a static control manifest fingerprint")
         return self
 
 

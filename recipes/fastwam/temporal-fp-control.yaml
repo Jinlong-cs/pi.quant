@@ -1,0 +1,30 @@
+schema_version: 1
+plan_id: fastwam-temporal-fp-control
+backend: none
+quant_format: none
+representation: fp_control
+module_include:
+  - "*"
+module_exclude: []
+calibration:
+  schema_version: 1
+  dataset_id: external-fastwam-temporal
+  dataset_revision: supplied-by-caller
+  sample_count: 4
+  seed: 20260806
+  stages: [early, pre_gripper_transition, post_gripper_transition, late]
+  input_fields: [video, language, proprio, history, flow_noise, timestep]
+seed: 20260806
+capture_points: &fastwam_temporal_capture_points
+  - video_backbone.block.00.output
+  - video_backbone.block.15.output
+  - video_backbone.block.29.output
+  - context.video_text_embedding
+  - context.proprio_bridge
+  - action_backbone.block.00.output
+  - action_backbone.block.15.output
+  - action_backbone.block.29.output
+  - action.boundary.input
+  - action.boundary.flow
+  - action.output
+timing_boundary: source/offline temporal diagnostics; no target latency

@@ -18,11 +18,18 @@ from piquant.contracts import (
     ModuleDescriptor,
     OptimizationPlan,
     QuantizationResult,
+    RolloutDivergenceReport,
     SampleRef,
     SensitivityRank,
     SensitivityStudyRecord,
     SensitivityTrial,
+    SequenceRef,
     TargetFingerprint,
+    TemporalCalibrationManifest,
+    TemporalCaptureSpec,
+    TemporalGoldenCaptureManifest,
+    TemporalMetricReport,
+    TemporalStudyRecord,
     TensorMetric,
     load_plan,
 )
@@ -49,9 +56,16 @@ __all__ = [
     "SensitivityRank",
     "SensitivityStudyRecord",
     "SensitivityTrial",
+    "SequenceRef",
     "TargetFingerprint",
+    "TemporalCalibrationManifest",
+    "TemporalCaptureSpec",
+    "TemporalGoldenCaptureManifest",
+    "TemporalMetricReport",
+    "TemporalStudyRecord",
     "TensorMetric",
+    "RolloutDivergenceReport",
     "load_plan",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

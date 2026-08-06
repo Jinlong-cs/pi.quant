@@ -16,6 +16,10 @@ from piquant.contracts import (
     OptimizationPlan,
     QuantizationResult,
     SensitivityDiagnostics,
+    TemporalCalibrationManifest,
+    TemporalCaptureSpec,
+    TemporalMetricReport,
+    TemporalMode,
 )
 
 TensorMap = Mapping[str, Any]
@@ -47,6 +51,21 @@ class SemanticModelAdapter(ModelAdapter, Protocol):
 
 
 @runtime_checkable
+class TemporalModelAdapter(SemanticModelAdapter, Protocol):
+    """Narrow WAM capability with explicit teacher-forced and iterative paths."""
+
+    def temporal_capture_specs(self) -> Sequence[TemporalCaptureSpec]: ...
+
+    def forward_temporal(
+        self,
+        batch: Mapping[str, Any],
+        capture_points: Sequence[str],
+        *,
+        mode: TemporalMode,
+    ) -> TensorMap: ...
+
+
+@runtime_checkable
 class TorchQuantizableAdapter(SemanticModelAdapter, Protocol):
     """Narrow capability required by the Torch/ModelOpt backend."""
 
@@ -55,6 +74,13 @@ class TorchQuantizableAdapter(SemanticModelAdapter, Protocol):
     def forward_backend(self, model: Any, batch: Mapping[str, Any]) -> None: ...
 
     def with_backend_model(self, model: Any) -> TorchQuantizableAdapter: ...
+
+
+@runtime_checkable
+class TemporalTorchQuantizableAdapter(TemporalModelAdapter, TorchQuantizableAdapter, Protocol):
+    """Narrow intersection required for temporal ModelOpt trials."""
+
+    def with_backend_model(self, model: Any) -> TemporalTorchQuantizableAdapter: ...
 
 
 class CalibrationProvider(Protocol):
@@ -72,6 +98,12 @@ class CalibrationProvider(Protocol):
 class ManifestCalibrationProvider(CalibrationProvider, Protocol):
     @property
     def manifest(self) -> CalibrationManifest: ...
+
+
+@runtime_checkable
+class TemporalManifestCalibrationProvider(CalibrationProvider, Protocol):
+    @property
+    def manifest(self) -> TemporalCalibrationManifest: ...
 
 
 class TaskLossProvider(Protocol):
@@ -116,6 +148,21 @@ class StreamingNumericalAnalyzer(NumericalAnalyzer, Protocol):
     def finalize(self) -> SensitivityDiagnostics: ...
 
 
+class StreamingTemporalAnalyzer(Protocol):
+    def add(
+        self,
+        reference: TensorMap,
+        candidate: TensorMap,
+        sequence_metadata: Sequence[Mapping[str, Any]],
+        capture_specs: Sequence[TemporalCaptureSpec],
+        *,
+        mode: TemporalMode,
+        action_schema: ActionSchema,
+    ) -> None: ...
+
+    def finalize(self) -> list[TemporalMetricReport]: ...
+
+
 class TaskEvaluator(Protocol):
     """Evaluate a candidate in the currently supported offline task boundary."""
 
@@ -129,3 +176,4 @@ class EvidenceStore(Protocol):
 
 
 AdapterFactory = Callable[[], SemanticModelAdapter]
+TemporalAdapterFactory = Callable[[], TemporalModelAdapter]

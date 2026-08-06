@@ -40,6 +40,29 @@ fact to imply packed quantization.
   drift and rank-change ablations, golden, inventory, and split fingerprints
   without embedding raw tensors.
 
+## Temporal contracts
+
+- `SequenceRef` binds one temporal window to an episode, camera keys,
+  instruction/action hashes, stage, normalization, seed, flow noise, timestep
+  schedule, denoise steps, and action ABI.
+- `TemporalCalibrationManifest` defines calibration, diagnostic holdout,
+  static-control, or promotion-reserved sequence sets. Callers must enforce
+  episode disjointness before a study; `require_temporal_episode_disjoint`
+  provides the shared guard.
+- `TemporalCaptureSpec` requires explicit tensor axes and distinguishes
+  activation, flow, action, latent, and rollout captures.
+- `TemporalMetricReport` keeps teacher-forced and iterative reports separate
+  and buckets stage, timestep, denoise step, and action horizon. Optional
+  `RolloutDivergenceReport` records action and world-latent drift only when the
+  source adapter actually exposes those tensors.
+- Action horizon and rollout horizon are distinct axes. Action horizon indexes
+  the actions inside one policy output; rollout horizon indexes successive
+  policy/environment states and must come from a `kind=rollout` capture that
+  explicitly declares a `rollout_horizon` axis.
+- `TemporalGoldenCaptureManifest` and `TemporalStudyRecord` carry the same
+  artifact hashes and candidate lineage as the VLA study contracts, with an
+  explicit source/offline-temporal boundary.
+
 `piquant validate-study` re-hashes the golden and candidate records and checks
 model, action, plan, trial, calibration, coverage, and status lineage. An Agent
 may write `measured`, `pending`, or `rejected` evidence. Only a human promotion

@@ -22,6 +22,13 @@ candidate, and the analyzer/evidence layers preserve comparable results.
   retains paired distributions without retaining a full activation corpus.
 - `TaskEvaluator` owns the current offline evaluation boundary.
 - `EvidenceStore` persists structured evidence but cannot promote it.
+- `TemporalModelAdapter` is a narrow WAM extension. It adds explicit temporal
+  capture axes and separate teacher-forced/iterative execution; it does not
+  make world-latent or rollout capture mandatory for ordinary VLA adapters.
+- `piquant.temporal_study.TemporalSensitivityRunner` reuses the same
+  fresh-model, explicit-backend, chunked-golden pattern for WAM sequences.
+  Missing teacher-forced or latent callbacks fail fast instead of manufacturing
+  a comparable signal.
 
 There is no automatic backend/model registry. The caller explicitly injects
 the adapter, providers, backend, analyzer, evaluator, and store. This prevents
@@ -43,6 +50,20 @@ ModelSpec + ActionSchema + CalibrationManifest
        EvidenceRecord[] -> SensitivityStudyRecord
 ```
 
+For temporal studies, the data path is:
+
+```text
+episode-disjoint sequence manifests
+             |
+  temporal FP golden (mode + axes + seed)
+             |
+  broad/component/rollback candidate
+             |
+  streaming stage/timestep/denoise/horizon metrics
+             |
+  action + optional latent rollout divergence
+```
+
 ## Stable identities
 
 Recipes select semantic logical IDs such as `vlm.block.09.attention.q`; the
@@ -59,6 +80,8 @@ before a study can be validated.
 
 The reference QDQ backend remains a synthetic harness. ModelOpt is the first
 real candidate backend. ORT is a temporary-graph capture integration, not a
-quantizer. TensorRT compilation, target benchmark, pi.cpp runtime packaging,
-server/client operation, and real closed loop are later layers and do not
-belong to a v0.2 source/offline claim.
+quantizer. FastWAM temporal execution is an explicit optional source
+integration; it does not imply a world model is available. TensorRT compilation,
+target benchmark, pi.cpp runtime packaging, server/client operation, and real
+closed loop are later layers and do not belong to v0.2/v0.3 source/offline
+claims.

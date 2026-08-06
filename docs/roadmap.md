@@ -6,7 +6,7 @@ Each version is a separate serial feature PR.
 | --- | --- | --- |
 | v0.1 | Contracts, ModelOpt/ORT boundaries, synthetic vertical workflow | Offline tests and structured evidence |
 | v0.2 | Real Pi0.5/LIBERO manifests, FP golden, semantic captures, hierarchical sensitivity | Source parity, deterministic replay, coverage, and selective recovery |
-| v0.3 | FastWAM/WAM temporal calibration and rollout-aware metrics | Temporal divergence and task evaluation |
+| v0.3 | FastWAM/WAM temporal calibration and rollout-aware metrics | Temporal divergence, calibration controls, and task-evaluator boundary |
 | v0.4 | AGX Ampere INT8 and RTX 5090 Blackwell FP8/NVFP4 compiler evidence | Target-local parity and timing gates |
 | v0.5 | Mixed-precision search, candidate ranking, LIBERO promotion | Comparable deployment and closed-loop evidence |
 | v1.0 | Stable plugin API and production artifact lineage | Cross-model and hardware promotion gates |

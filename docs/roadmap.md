@@ -8,7 +8,7 @@ Each version is a separate serial feature PR.
 | v0.2 | Real Pi0.5/LIBERO manifests, FP golden, semantic captures, hierarchical sensitivity | Source parity, deterministic replay, coverage, and selective recovery |
 | v0.3 | FastWAM/WAM temporal calibration and rollout-aware metrics | Temporal divergence, calibration controls, and task-evaluator boundary |
 | v0.4 | Target compiler contracts, ONNX/TensorRT inspection, deployment handoff, AGX/RTX 5090 capability gates | Target-local graph/build/timing evidence with unsupported states |
-| v0.5 | Mixed-precision search, candidate ranking, LIBERO promotion | Comparable deployment and closed-loop evidence |
+| v0.5 | Budgeted mixed-precision search, target-local Pareto ranking, staged LIBERO promotion | Split isolation, deterministic lineage, target evidence, and human-gated promotion |
 | v1.0 | Stable plugin API and production artifact lineage | Cross-model and hardware promotion gates |
 
 No roadmap item is accepted by documentation alone. The target platform,
@@ -22,3 +22,14 @@ publish target compiler plumbing and capability probes while AGX/RTX builds
 remain `pending`; it cannot call those probes latency or deployment evidence.
 QAT, pruning, distillation, step reduction, and custom kernels remain
 independent future features.
+
+v0.5 keeps one search problem per model, target, ABI, and benchmark protocol.
+It starts with FP, broad-quant, and manual-selective controls, generates a
+bounded sensitivity/cost-guided beam, filters by pre-registered source gates,
+and compiles only controls plus source-Pareto survivors. The target-local front
+retains uncertainty ties instead of selecting a winner through a hidden score.
+
+Promotion remains a separate ladder. Mechanical, offline, target latency, and
+server/client evidence do not imply Gate40 or full400 success. High-cost gates
+require an external approval record, and no search or promotion API may assign
+human acceptance.

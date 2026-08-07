@@ -24,7 +24,14 @@ PI05_STAGE_RULE = (
     "gripper-transition-v1:early=10pct;pre=first-transition-index;post=first-transition+1;"
     "late=episode_length-action_horizon;fallback=45pct/55pct"
 )
-ManifestSplit = Literal["calibration", "diagnostic_holdout", "random_control", "promotion_reserved"]
+ManifestSplit = Literal[
+    "calibration",
+    "diagnostic_holdout",
+    "random_control",
+    "sensitivity",
+    "search_validation",
+    "promotion_reserved",
+]
 
 
 def sha256_file(path: str | Path) -> str:

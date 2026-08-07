@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 
 
 class Contract(BaseModel):
@@ -184,7 +187,14 @@ class TemporalCaptureSpec(Contract):
 class SampleRef(Contract):
     schema_version: Literal[1] = 1
     sample_id: str = Field(min_length=1)
-    split: Literal["calibration", "diagnostic_holdout", "random_control", "promotion_reserved"]
+    split: Literal[
+        "calibration",
+        "diagnostic_holdout",
+        "random_control",
+        "sensitivity",
+        "search_validation",
+        "promotion_reserved",
+    ]
     suite: str = Field(min_length=1)
     task: str = Field(min_length=1)
     task_index: int = Field(ge=0)
@@ -216,7 +226,14 @@ class CalibrationManifest(Contract):
     manifest_id: str = Field(min_length=1)
     dataset_id: str = Field(min_length=1)
     dataset_revision: str = Field(min_length=1)
-    split: Literal["calibration", "diagnostic_holdout", "random_control", "promotion_reserved"]
+    split: Literal[
+        "calibration",
+        "diagnostic_holdout",
+        "random_control",
+        "sensitivity",
+        "search_validation",
+        "promotion_reserved",
+    ]
     preprocess_revision: str = Field(min_length=1)
     normalization_revision: str = Field(min_length=1)
     stage_rule: str = Field(min_length=1)
@@ -954,6 +971,658 @@ class TemporalStudyRecord(Contract):
         return self
 
 
+SearchCandidateStatus = Literal["pending", "measured", "rejected", "unsupported"]
+SearchBoundary = Literal["source", "target"]
+SearchControlKind = Literal["fp_control", "broad_quant", "manual_selective", "search"]
+ParetoDirection = Literal["minimize", "maximize"]
+ParetoObjectiveName = Literal[
+    "quality_drift",
+    "action_drift",
+    "rollout_drift",
+    "latency_p95_ms",
+    "memory_mib",
+    "artifact_size_bytes",
+    "quant_coverage",
+    "closed_loop_evidence_level",
+]
+PromotionGateId = Literal[
+    "mechanical",
+    "offline",
+    "target_latency",
+    "server_client_smoke",
+    "gate40",
+    "full400",
+]
+
+
+class SearchSplitAudit(Contract):
+    """Episode and seed identity audit for the four non-overlapping search splits."""
+
+    schema_version: Literal[1] = 1
+    calibration_episode_ids: list[str] = Field(min_length=1)
+    sensitivity_episode_ids: list[str] = Field(min_length=1)
+    search_validation_episode_ids: list[str] = Field(min_length=1)
+    promotion_reserved_episode_ids: list[str] = Field(min_length=1)
+    calibration_seed_ids: list[int] = Field(min_length=1)
+    sensitivity_seed_ids: list[int] = Field(min_length=1)
+    search_validation_seed_ids: list[int] = Field(min_length=1)
+    promotion_reserved_seed_ids: list[int] = Field(min_length=1)
+    stage_rule_hash: str = Field(min_length=64, max_length=64)
+    manifest_fingerprints: dict[str, str] = Field(min_length=4)
+
+    @model_validator(mode="after")
+    def validate_disjoint_splits(self) -> SearchSplitAudit:
+        raw_episode_splits = {
+            "calibration": self.calibration_episode_ids,
+            "sensitivity": self.sensitivity_episode_ids,
+            "search_validation": self.search_validation_episode_ids,
+            "promotion_reserved": self.promotion_reserved_episode_ids,
+        }
+        raw_seed_splits = {
+            "calibration": self.calibration_seed_ids,
+            "sensitivity": self.sensitivity_seed_ids,
+            "search_validation": self.search_validation_seed_ids,
+            "promotion_reserved": self.promotion_reserved_seed_ids,
+        }
+        for label, raw_splits in (("episode", raw_episode_splits), ("seed", raw_seed_splits)):
+            for name, values in raw_splits.items():
+                if len(values) != len(set(values)):
+                    raise ValueError(f"duplicate {label} IDs inside {name} split")
+        episode_splits: dict[str, set[Any]] = {name: set(values) for name, values in raw_episode_splits.items()}
+        seed_splits: dict[str, set[Any]] = {name: set(values) for name, values in raw_seed_splits.items()}
+        for label, split_sets in (("episode", episode_splits), ("seed", seed_splits)):
+            names = list(split_sets)
+            for index, left in enumerate(names):
+                for right in names[index + 1 :]:
+                    if overlap := sorted(split_sets[left] & split_sets[right], key=str):
+                        raise ValueError(f"{label} overlap between {left} and {right}: {overlap!r}")
+        return self
+
+
+class SearchBudget(Contract):
+    schema_version: Literal[1] = 1
+    beam_width: int = Field(gt=0)
+    max_source_candidates: int = Field(gt=0)
+    max_compiler_builds: int = Field(ge=0)
+    max_gate40: int = Field(ge=0)
+    max_full400: int = Field(ge=0)
+    target_compile_limit: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def validate_limits(self) -> SearchBudget:
+        if self.beam_width > self.max_source_candidates:
+            raise ValueError("beam_width cannot exceed max_source_candidates")
+        if self.target_compile_limit > self.max_compiler_builds:
+            raise ValueError("target_compile_limit cannot exceed max_compiler_builds")
+        if self.target_compile_limit < 3:
+            raise ValueError("target_compile_limit must reserve the three required controls")
+        return self
+
+
+class SearchObjective(Contract):
+    schema_version: Literal[1] = 1
+    name: ParetoObjectiveName
+    direction: ParetoDirection
+
+    @model_validator(mode="after")
+    def validate_direction(self) -> SearchObjective:
+        expected = "maximize" if self.name in {"quant_coverage", "closed_loop_evidence_level"} else "minimize"
+        if self.direction != expected:
+            raise ValueError(f"{self.name} must use direction={expected}")
+        return self
+
+
+class SearchConstraint(Contract):
+    """One pre-registered numeric hard constraint at a source or target gate."""
+
+    schema_version: Literal[1] = 1
+    boundary: SearchBoundary
+    name: ParetoObjectiveName
+    operator: Literal["le", "ge"]
+    threshold: float = Field(allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_operator(self) -> SearchConstraint:
+        expected = "ge" if self.name in {"quant_coverage", "closed_loop_evidence_level"} else "le"
+        if self.operator != expected:
+            raise ValueError(f"{self.name} constraints must use operator={expected}")
+        source_metrics = {"quality_drift", "action_drift", "rollout_drift", "quant_coverage"}
+        if self.boundary == "source" and self.name not in source_metrics:
+            raise ValueError(f"source constraints cannot use {self.name!r}")
+        if self.name == "closed_loop_evidence_level":
+            raise ValueError("closed-loop thresholds belong to promotion_constraints, not source/target search constraints")
+        return self
+
+
+class SensitivitySignal(Contract):
+    """One measured quality-recovery/target-cost signal used to order mutations."""
+
+    schema_version: Literal[1] = 1
+    group: str = Field(min_length=1)
+    from_precision: PrecisionMode
+    to_precision: PrecisionMode
+    quality_recovery: float = Field(gt=0.0, allow_inf_nan=False)
+    latency_cost_ms: float = Field(ge=0.0, allow_inf_nan=False)
+    source_evidence: ArtifactRef
+    target_cost_evidence: ArtifactRef
+
+    @model_validator(mode="after")
+    def validate_transition(self) -> SensitivitySignal:
+        if self.from_precision == self.to_precision:
+            raise ValueError("sensitivity signals must change precision")
+        return self
+
+
+def candidate_recipe_hash(
+    *,
+    recipe_id: str,
+    control_kind: SearchControlKind,
+    precision_map: Mapping[str, PrecisionMode],
+    parent_recipe_id: str | None,
+    mutation: Sequence[str],
+) -> str:
+    """Return the canonical hash for one immutable candidate recipe."""
+
+    return fingerprint(
+        {
+            "recipe_id": recipe_id,
+            "control_kind": control_kind,
+            "precision_map": dict(precision_map),
+            "parent_recipe_id": parent_recipe_id,
+            "mutation": list(mutation),
+        }
+    )
+
+
+class CandidateRecipe(Contract):
+    """Immutable precision map and mutation lineage for one search candidate."""
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True, frozen=True)
+
+    schema_version: Literal[1] = 1
+    recipe_id: str = Field(min_length=1)
+    control_kind: SearchControlKind
+    precision_map: Mapping[str, PrecisionMode] = Field(min_length=1)
+    parent_recipe_id: str | None = None
+    mutation: tuple[str, ...] = ()
+    recipe_hash: str = Field(min_length=64, max_length=64)
+
+    @model_validator(mode="after")
+    def validate_identity(self) -> CandidateRecipe:
+        if self.control_kind == "search" and self.parent_recipe_id is None:
+            raise ValueError("search recipes require parent_recipe_id")
+        if self.parent_recipe_id == self.recipe_id:
+            raise ValueError("recipe cannot parent itself")
+        expected = candidate_recipe_hash(
+            recipe_id=self.recipe_id,
+            control_kind=self.control_kind,
+            precision_map=self.precision_map,
+            parent_recipe_id=self.parent_recipe_id,
+            mutation=self.mutation,
+        )
+        if self.recipe_hash != expected:
+            raise ValueError("recipe_hash does not match immutable recipe identity")
+        object.__setattr__(self, "precision_map", MappingProxyType(dict(self.precision_map)))
+        return self
+
+    @field_serializer("precision_map")
+    def serialize_precision_map(self, value: Mapping[str, PrecisionMode]) -> dict[str, PrecisionMode]:
+        return dict(value)
+
+    def __deepcopy__(self, memo: dict[int, Any] | None = None) -> CandidateRecipe:
+        return self
+
+
+class CandidateMetrics(Contract):
+    """Metrics attached to either source validation or target compilation."""
+
+    schema_version: Literal[1] = 1
+    shape_match: bool
+    finite: bool
+    implementation_parity_passed: bool | None = None
+    build_succeeded: bool | None = None
+    quality_drift: float | None = Field(default=None, ge=0.0, allow_inf_nan=False)
+    action_drift: float | None = Field(default=None, ge=0.0, allow_inf_nan=False)
+    rollout_drift: float | None = Field(default=None, ge=0.0, allow_inf_nan=False)
+    latency_p95_ms: float | None = Field(default=None, ge=0.0, allow_inf_nan=False)
+    memory_mib: int | None = Field(default=None, ge=0)
+    artifact_size_bytes: int | None = Field(default=None, ge=0)
+    quant_coverage: float = Field(ge=0.0, le=1.0)
+    closed_loop_evidence_level: int = Field(default=0, ge=0, le=5)
+    uncertainty: dict[str, float] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_uncertainty(self) -> CandidateMetrics:
+        allowed = {
+            "quality_drift",
+            "action_drift",
+            "rollout_drift",
+            "latency_p95_ms",
+            "memory_mib",
+            "artifact_size_bytes",
+            "quant_coverage",
+            "closed_loop_evidence_level",
+        }
+        if unknown := sorted(set(self.uncertainty) - allowed):
+            raise ValueError(f"uncertainty references unknown metrics: {unknown!r}")
+        if any(not math.isfinite(value) or value < 0.0 for value in self.uncertainty.values()):
+            raise ValueError("metric uncertainty values must be finite and non-negative")
+        if missing := sorted(name for name in self.uncertainty if getattr(self, name) is None):
+            raise ValueError(f"metric uncertainty requires the corresponding metric value: {missing!r}")
+        return self
+
+
+class CandidateRecord(Contract):
+    """One source or target candidate with complete immutable lineage references."""
+
+    schema_version: Literal[1] = 1
+    candidate_id: str = Field(min_length=1)
+    search_plan_hash: str = Field(min_length=64, max_length=64)
+    recipe: CandidateRecipe
+    model: ModelSpec
+    target: TargetFingerprint
+    parent_candidate_id: str | None = None
+    checkpoint: ArtifactRef | None = None
+    calibration_manifest_fingerprint: str = Field(min_length=64, max_length=64)
+    sensitivity_manifest_fingerprint: str = Field(min_length=64, max_length=64)
+    search_validation_manifest_fingerprint: str = Field(min_length=64, max_length=64)
+    promotion_reserved_manifest_fingerprint: str = Field(min_length=64, max_length=64)
+    lineage: list[ArtifactRef] = Field(default_factory=list)
+    source_metrics: CandidateMetrics | None = None
+    target_metrics: CandidateMetrics | None = None
+    compiler_evidence: list[ArtifactRef] = Field(default_factory=list)
+    timing_evidence: list[ArtifactRef] = Field(default_factory=list)
+    status: SearchCandidateStatus
+    reason_code: str | None = None
+    reason: str | None = None
+    commands: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_status(self) -> CandidateRecord:
+        if self.candidate_id != self.recipe.recipe_id:
+            raise ValueError("candidate_id must equal recipe_id")
+        if self.status in {"rejected", "unsupported"} and not self.reason_code:
+            raise ValueError("rejected or unsupported candidates require reason_code")
+        if self.status == "measured" and self.source_metrics is None and self.target_metrics is None:
+            raise ValueError("measured candidates require source or target metrics")
+        measured_metrics = [metrics for metrics in (self.source_metrics, self.target_metrics) if metrics is not None]
+        if self.status == "measured" and any(not metrics.shape_match or not metrics.finite for metrics in measured_metrics):
+            raise ValueError("measured candidate metrics require matching finite outputs")
+        if (
+            self.status == "measured"
+            and self.target_metrics is not None
+            and (self.target_metrics.build_succeeded is not True or self.target_metrics.implementation_parity_passed is not True)
+        ):
+            raise ValueError("measured target candidates require successful build and implementation parity")
+        if self.target_metrics is not None and not self.compiler_evidence:
+            raise ValueError("target metrics require compiler evidence references")
+        if self.target_metrics is not None and self.target_metrics.latency_p95_ms is not None and not self.timing_evidence:
+            raise ValueError("target latency metrics require timing evidence references")
+        return self
+
+
+class ParetoFrontRecord(Contract):
+    """Non-dominated candidate set with explicit objectives and tie preservation."""
+
+    schema_version: Literal[1] = 1
+    front_id: str = Field(min_length=1)
+    search_plan_hash: str = Field(min_length=64, max_length=64)
+    boundary: SearchBoundary
+    model: ModelSpec
+    target: TargetFingerprint
+    objectives: list[SearchObjective] = Field(min_length=1)
+    candidate_ids: list[str] = Field(default_factory=list)
+    objective_values: dict[str, dict[str, float]] = Field(default_factory=dict)
+    objective_uncertainty: dict[str, dict[str, float]] = Field(default_factory=dict)
+    non_dominated_candidate_ids: list[str] = Field(default_factory=list)
+    dominated_candidate_ids: list[str] = Field(default_factory=list)
+    tie_groups: list[list[str]] = Field(default_factory=list)
+    ranking_reasons: dict[str, list[str]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_front(self) -> ParetoFrontRecord:
+        candidate_set = set(self.candidate_ids)
+        if len(candidate_set) != len(self.candidate_ids):
+            raise ValueError("Pareto candidate IDs must be unique")
+        if set(self.objective_values) != candidate_set:
+            raise ValueError("Pareto objective_values must cover candidate_ids exactly")
+        if set(self.objective_uncertainty) != candidate_set:
+            raise ValueError("Pareto objective_uncertainty must cover candidate_ids exactly")
+        if set(self.non_dominated_candidate_ids) | set(self.dominated_candidate_ids) != candidate_set:
+            raise ValueError("Pareto dominated and non-dominated IDs must cover candidate_ids")
+        if set(self.non_dominated_candidate_ids) & set(self.dominated_candidate_ids):
+            raise ValueError("Pareto candidate cannot be both dominated and non-dominated")
+        for group in self.tie_groups:
+            if len(group) < 2 or not set(group) <= set(self.non_dominated_candidate_ids) or len(set(group)) != len(group):
+                raise ValueError("Pareto tie groups must contain at least two unique non-dominated candidate IDs")
+        objective_names = [objective.name for objective in self.objectives]
+        if len(set(objective_names)) != len(objective_names):
+            raise ValueError("Pareto objective names must be unique")
+        for candidate_id, values in self.objective_values.items():
+            if set(values) != set(objective_names):
+                raise ValueError(f"Pareto objective values for {candidate_id!r} do not match objectives")
+            if set(self.objective_uncertainty[candidate_id]) != set(objective_names):
+                raise ValueError(f"Pareto objective uncertainty for {candidate_id!r} does not match objectives")
+            if any(value < 0.0 for value in self.objective_uncertainty[candidate_id].values()):
+                raise ValueError("Pareto objective uncertainty must be non-negative")
+        return self
+
+
+class SearchPlan(Contract):
+    """One independent search problem for one model, target, ABI, and protocol."""
+
+    schema_version: Literal[1] = 1
+    plan_id: str = Field(min_length=1)
+    plan_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    model: ModelSpec
+    target: TargetFingerprint
+    benchmark: BenchmarkProtocol
+    objective: Literal["minimize_target_full_policy_latency"]
+    objectives: list[SearchObjective] = Field(min_length=1)
+    constraints: list[SearchConstraint] = Field(min_length=1)
+    precision_space: list[PrecisionMode] = Field(min_length=1)
+    semantic_groups: list[str] = Field(min_length=1)
+    controls: list[CandidateRecipe] = Field(min_length=3)
+    sensitivity_signals: list[SensitivitySignal] = Field(min_length=1)
+    split_audit: SearchSplitAudit
+    budget: SearchBudget
+    seed: int
+    promotion_constraints: dict[str, float] = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_search_identity(self) -> SearchPlan:
+        required_manifest_names = {"calibration", "sensitivity", "search_validation", "promotion_reserved"}
+        if not required_manifest_names <= set(self.split_audit.manifest_fingerprints):
+            raise ValueError(f"SearchPlan split audit must include {sorted(required_manifest_names)!r} manifest fingerprints")
+        if any(len(value) != 64 for value in self.split_audit.manifest_fingerprints.values()):
+            raise ValueError("SearchPlan manifest fingerprints must be SHA256 strings")
+        required_controls = {"fp_control", "broad_quant", "manual_selective"}
+        controls = [recipe.control_kind for recipe in self.controls]
+        if len(self.controls) != 3 or set(controls) != required_controls:
+            raise ValueError(f"SearchPlan controls must contain exactly one of {sorted(required_controls)!r}")
+        if len({recipe.recipe_id for recipe in self.controls}) != len(self.controls):
+            raise ValueError("SearchPlan control recipe IDs must be unique")
+        if len(self.precision_space) != len(set(self.precision_space)):
+            raise ValueError("SearchPlan precision_space values must be unique")
+        if len(self.semantic_groups) != len(set(self.semantic_groups)):
+            raise ValueError("SearchPlan semantic_groups values must be unique")
+        if self.budget.max_source_candidates < len(self.controls):
+            raise ValueError("SearchPlan source budget must include all required controls")
+        precision_space = set(self.precision_space)
+        groups = set(self.semantic_groups)
+        control_precision_maps = [tuple(sorted(recipe.precision_map.items())) for recipe in self.controls]
+        if len(control_precision_maps) != len(set(control_precision_maps)):
+            raise ValueError("SearchPlan control recipes must have distinct precision maps")
+        for recipe in self.controls:
+            if set(recipe.precision_map) != groups:
+                raise ValueError(f"recipe {recipe.recipe_id!r} must assign every semantic group exactly once")
+            if not set(recipe.precision_map.values()) <= precision_space:
+                raise ValueError(f"recipe {recipe.recipe_id!r} uses precision outside precision_space")
+        signal_keys = [(signal.group, signal.from_precision, signal.to_precision) for signal in self.sensitivity_signals]
+        if len(signal_keys) != len(set(signal_keys)):
+            raise ValueError("SearchPlan sensitivity signals must be unique by group and precision transition")
+        signal_groups = {signal.group for signal in self.sensitivity_signals}
+        if not signal_groups <= groups:
+            raise ValueError("sensitivity signal contains an unknown semantic group")
+        broad = next(recipe for recipe in self.controls if recipe.control_kind == "broad_quant")
+        for signal in self.sensitivity_signals:
+            if signal.from_precision not in precision_space or signal.to_precision not in precision_space:
+                raise ValueError("sensitivity signal uses precision outside precision_space")
+            if broad.precision_map[signal.group] != signal.from_precision:
+                raise ValueError(f"sensitivity signal for {signal.group!r} does not start from the broad control precision")
+        objective_names = {objective.name for objective in self.objectives}
+        required_objectives = {"latency_p95_ms", "quant_coverage", "closed_loop_evidence_level"}
+        if not required_objectives <= objective_names:
+            raise ValueError(f"SearchPlan objectives must include {sorted(required_objectives)!r}")
+        if not objective_names & {"quality_drift", "action_drift", "rollout_drift"}:
+            raise ValueError("SearchPlan objectives require a quality, action, or rollout drift metric")
+        if not objective_names & {"memory_mib", "artifact_size_bytes"}:
+            raise ValueError("SearchPlan objectives require memory or artifact size")
+        constraint_keys = [(constraint.boundary, constraint.name) for constraint in self.constraints]
+        if len(constraint_keys) != len(set(constraint_keys)):
+            raise ValueError("SearchPlan constraints must be unique by boundary and metric")
+        quality_objectives = objective_names & {"quality_drift", "action_drift", "rollout_drift"}
+        required_constraints = {(boundary, name) for boundary in ("source", "target") for name in quality_objectives} | {
+            ("source", "quant_coverage"),
+            ("target", "quant_coverage"),
+            ("target", "latency_p95_ms"),
+        }
+        if missing := sorted(required_constraints - set(constraint_keys)):
+            raise ValueError(f"SearchPlan is missing required hard constraints: {missing!r}")
+        size_objectives = objective_names & {"memory_mib", "artifact_size_bytes"}
+        if not any(("target", name) in constraint_keys for name in size_objectives):
+            raise ValueError("SearchPlan requires a target memory or artifact-size hard constraint")
+        if any(not math.isfinite(value) for value in self.promotion_constraints.values()):
+            raise ValueError("promotion constraints must be finite")
+        if self.plan_hash is not None and self.plan_hash != search_plan_hash(self):
+            raise ValueError("plan_hash does not match SearchPlan identity")
+        return self
+
+
+def search_plan_hash(plan: SearchPlan) -> str:
+    """Hash a SearchPlan without recursively including its optional plan_hash."""
+
+    payload = plan.model_dump(mode="json", exclude={"plan_hash"})
+    return fingerprint(payload)
+
+
+def search_source_objectives(plan: SearchPlan) -> list[SearchObjective]:
+    """Return the pre-registered objectives that are valid before target compilation."""
+
+    source_names = {"quality_drift", "action_drift", "rollout_drift", "quant_coverage"}
+    return [objective for objective in plan.objectives if objective.name in source_names]
+
+
+class PromotionGate(Contract):
+    schema_version: Literal[1] = 1
+    gate_id: PromotionGateId
+    status: SearchCandidateStatus
+    approval_required: bool = False
+    approval_record: ArtifactRef | None = None
+    evidence: list[ArtifactRef] = Field(default_factory=list)
+    reason_code: str | None = None
+
+    @model_validator(mode="after")
+    def validate_gate(self) -> PromotionGate:
+        if self.gate_id in {"gate40", "full400"} and not self.approval_required:
+            raise ValueError(f"{self.gate_id} requires explicit approval")
+        if self.status in {"rejected", "unsupported"} and not self.reason_code:
+            raise ValueError("rejected or unsupported promotion gates require reason_code")
+        if self.status == "measured" and not self.evidence:
+            raise ValueError("measured promotion gates require evidence")
+        if self.status in {"measured", "rejected"} and self.approval_required and self.approval_record is None:
+            raise ValueError("executed high-cost promotion gates require approval_record")
+        return self
+
+
+class PromotionPlan(Contract):
+    """Pending-first gate plan; it does not represent human acceptance."""
+
+    schema_version: Literal[1] = 1
+    plan_id: str = Field(min_length=1)
+    search_plan_hash: str = Field(min_length=64, max_length=64)
+    target_front_id: str = Field(min_length=1)
+    candidate_id: str = Field(min_length=1)
+    candidate_recipe_hash: str = Field(min_length=64, max_length=64)
+    baseline_candidate_id: str = Field(min_length=1)
+    baseline_recipe_hash: str = Field(min_length=64, max_length=64)
+    model: ModelSpec
+    target: TargetFingerprint
+    benchmark: BenchmarkProtocol
+    quality_constraints: dict[str, float] = Field(default_factory=dict)
+    latency_constraints: dict[str, float] = Field(default_factory=dict)
+    gates: list[PromotionGate] = Field(min_length=6)
+    status: Literal["pending", "measured", "rejected"] = "pending"
+    notes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_gate_order(self) -> PromotionPlan:
+        expected = ["mechanical", "offline", "target_latency", "server_client_smoke", "gate40", "full400"]
+        actual = [gate.gate_id for gate in self.gates]
+        if actual != expected:
+            raise ValueError(f"promotion gates must follow {expected!r}")
+        if self.candidate_id == self.baseline_candidate_id:
+            raise ValueError("promotion candidate and baseline must be different")
+        for index, gate in enumerate(self.gates):
+            if gate.status != "measured":
+                if any(later.status != "pending" for later in self.gates[index + 1 :]):
+                    raise ValueError("promotion gates after the first incomplete or failed gate must remain pending")
+                break
+        statuses = [gate.status for gate in self.gates]
+        expected_status = (
+            "rejected"
+            if any(status in {"rejected", "unsupported"} for status in statuses)
+            else "measured"
+            if all(status == "measured" for status in statuses)
+            else "pending"
+        )
+        if self.status != expected_status:
+            raise ValueError(f"promotion plan status must be {expected_status!r} for its gate states")
+        return self
+
+
+class PromotionEvidence(Contract):
+    """Machine evidence for one promotion gate; accepted is intentionally not a state."""
+
+    schema_version: Literal[1] = 1
+    evidence_id: str = Field(min_length=1)
+    promotion_plan_id: str = Field(min_length=1)
+    candidate_id: str = Field(min_length=1)
+    gate_id: PromotionGateId
+    status: Literal["pending", "measured", "rejected", "unsupported"]
+    metrics: dict[str, float] = Field(default_factory=dict)
+    artifacts: list[ArtifactRef] = Field(default_factory=list)
+    approval_record: ArtifactRef | None = None
+    reason_code: str | None = None
+    commands: list[str] = Field(default_factory=list)
+    verified_by: str = ""
+    verified_at: str = ""
+
+    @model_validator(mode="after")
+    def validate_evidence(self) -> PromotionEvidence:
+        if self.status in {"rejected", "unsupported"} and not self.reason_code:
+            raise ValueError("rejected or unsupported promotion evidence requires reason_code")
+        if self.status == "measured" and (not self.verified_by or not self.verified_at or not self.artifacts):
+            raise ValueError("measured promotion evidence requires verifier, time, and artifacts")
+        if self.gate_id in {"gate40", "full400"} and self.status in {"measured", "rejected"} and self.approval_record is None:
+            raise ValueError("executed high-cost promotion evidence requires approval_record")
+        return self
+
+
+class SearchStudyRecord(Contract):
+    """Serializable search result with separate source and target evidence lanes."""
+
+    schema_version: Literal[1] = 1
+    study_id: str = Field(min_length=1)
+    status: Literal["pending", "measured", "rejected"]
+    plan: SearchPlan
+    plan_hash: str = Field(min_length=64, max_length=64)
+    source_candidates: list[CandidateRecord] = Field(default_factory=list)
+    target_candidates: list[CandidateRecord] = Field(default_factory=list)
+    source_front: ParetoFrontRecord | None = None
+    target_front: ParetoFrontRecord | None = None
+    compiler_build_count: int = Field(ge=0)
+    gate40_count: int = Field(ge=0)
+    full400_count: int = Field(ge=0)
+    promotion_plan: PromotionPlan | None = None
+    notes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_study(self) -> SearchStudyRecord:
+        if self.plan_hash != search_plan_hash(self.plan):
+            raise ValueError("SearchStudyRecord plan_hash differs from plan")
+        if len(self.source_candidates) > self.plan.budget.max_source_candidates:
+            raise ValueError("source candidate count exceeds SearchPlan budget")
+        if self.compiler_build_count > self.plan.budget.max_compiler_builds:
+            raise ValueError("compiler build count exceeds SearchPlan budget")
+        if len(self.target_candidates) > self.plan.budget.target_compile_limit:
+            raise ValueError("target candidate count exceeds SearchPlan compile limit")
+        if self.compiler_build_count != len(self.target_candidates):
+            raise ValueError("compiler build count must match target candidate records")
+        if self.gate40_count > self.plan.budget.max_gate40:
+            raise ValueError("gate40 count exceeds SearchPlan budget")
+        if self.full400_count > self.plan.budget.max_full400:
+            raise ValueError("full400 count exceeds SearchPlan budget")
+        source_ids = [candidate.candidate_id for candidate in self.source_candidates]
+        target_ids = [candidate.candidate_id for candidate in self.target_candidates]
+        if len(source_ids) != len(set(source_ids)) or len(target_ids) != len(set(target_ids)):
+            raise ValueError("search candidate IDs must be unique within each evidence lane")
+        for candidate in [*self.source_candidates, *self.target_candidates]:
+            if candidate.search_plan_hash != self.plan_hash or candidate.model != self.plan.model or candidate.target != self.plan.target:
+                raise ValueError("search candidate identity differs from SearchPlan")
+        if any(candidate.parent_candidate_id is not None for candidate in self.source_candidates):
+            raise ValueError("source candidates cannot reference target parent candidates")
+        source_by_id = {candidate.candidate_id: candidate for candidate in self.source_candidates}
+        for candidate in self.target_candidates:
+            if candidate.parent_candidate_id not in source_by_id:
+                raise ValueError("target candidate must reference a source candidate")
+            parent = source_by_id[candidate.parent_candidate_id]
+            if candidate.recipe != parent.recipe or candidate.source_metrics != parent.source_metrics:
+                raise ValueError("target candidate recipe and source metrics must match its parent")
+        for front, boundary, lane_ids in (
+            (self.source_front, "source", set(source_ids)),
+            (self.target_front, "target", set(target_ids)),
+        ):
+            if front is None:
+                continue
+            if (
+                front.boundary != boundary
+                or front.search_plan_hash != self.plan_hash
+                or front.model != self.plan.model
+                or front.target != self.plan.target
+            ):
+                raise ValueError(f"{boundary} Pareto front identity differs from SearchPlan")
+            if not set(front.candidate_ids) <= lane_ids:
+                raise ValueError(f"{boundary} Pareto front references candidates outside its evidence lane")
+            expected_objectives = search_source_objectives(self.plan) if boundary == "source" else self.plan.objectives
+            if front.objectives != expected_objectives:
+                raise ValueError(f"{boundary} Pareto front objectives differ from SearchPlan")
+        all_statuses = [candidate.status for candidate in [*self.source_candidates, *self.target_candidates]]
+        target_statuses = [candidate.status for candidate in self.target_candidates]
+        expected_status = (
+            "pending"
+            if not target_statuses or any(status == "pending" for status in all_statuses)
+            else "measured"
+            if any(status == "measured" for status in target_statuses)
+            else "rejected"
+        )
+        if self.status != expected_status:
+            raise ValueError(f"search study status must be {expected_status!r} for its target evidence")
+        if self.promotion_plan is not None:
+            if (
+                self.promotion_plan.search_plan_hash != self.plan_hash
+                or self.promotion_plan.model != self.plan.model
+                or self.promotion_plan.target != self.plan.target
+                or self.promotion_plan.benchmark != self.plan.benchmark
+            ):
+                raise ValueError("promotion plan identity differs from SearchPlan")
+            if self.promotion_plan.candidate_id not in target_ids or self.promotion_plan.baseline_candidate_id not in target_ids:
+                raise ValueError("promotion plan candidates must come from target evidence")
+            candidate = next(
+                candidate for candidate in self.target_candidates if candidate.candidate_id == self.promotion_plan.candidate_id
+            )
+            baseline = next(
+                candidate for candidate in self.target_candidates if candidate.candidate_id == self.promotion_plan.baseline_candidate_id
+            )
+            if (
+                candidate.recipe.recipe_hash != self.promotion_plan.candidate_recipe_hash
+                or baseline.recipe.recipe_hash != self.promotion_plan.baseline_recipe_hash
+            ):
+                raise ValueError("promotion plan recipe identity differs from target evidence")
+            if self.target_front is None or self.promotion_plan.target_front_id != self.target_front.front_id:
+                raise ValueError("promotion plan must reference the study target Pareto front")
+            gate_status = {gate.gate_id: gate.status for gate in self.promotion_plan.gates}
+            expected_gate40_count = int(gate_status["gate40"] != "pending")
+            expected_full400_count = int(gate_status["full400"] != "pending")
+            if self.gate40_count != expected_gate40_count or self.full400_count != expected_full400_count:
+                raise ValueError("promotion attempt counts must match terminal high-cost gate states")
+        elif self.gate40_count or self.full400_count:
+            raise ValueError("high-cost promotion attempts require a PromotionPlan")
+        return self
+
+
 def load_plan(path: str | Path) -> OptimizationPlan:
     """Load JSON or YAML and validate it through the single public schema."""
 
@@ -972,6 +1641,26 @@ def load_compilation_plan(path: str | Path) -> CompilationPlan:
     if not isinstance(data, dict):
         raise ValueError(f"compilation plan must be a mapping: {source}")
     return CompilationPlan.model_validate(data)
+
+
+def load_search_plan(path: str | Path) -> SearchPlan:
+    """Load a v0.5 search plan through the single public schema."""
+
+    source = Path(path)
+    data = yaml.safe_load(source.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"search plan must be a mapping: {source}")
+    return SearchPlan.model_validate(data)
+
+
+def load_promotion_plan(path: str | Path) -> PromotionPlan:
+    """Load a pending-first promotion plan through the public schema."""
+
+    source = Path(path)
+    data = yaml.safe_load(source.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"promotion plan must be a mapping: {source}")
+    return PromotionPlan.model_validate(data)
 
 
 def load_deployment_manifest(path: str | Path) -> DeploymentCandidateManifest:

@@ -1,0 +1,34 @@
+schema_version: 1
+plan_id: rtx5090-tensorrt-fp16-template
+compiler: tensorrt
+source_artifact:
+  schema_version: 1
+  kind: candidate-onnx
+  path: /external/artifacts/candidate.onnx
+  sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+target:
+  schema_version: 1
+  platform: Linux-x86_64
+  python_version: "3.12"
+  device: cuda:0
+  gpu_name: NVIDIA GeForce RTX 5090
+  compute_capability: "12.0"
+  driver_version: measured-on-target
+  cuda_version: measured-on-target
+  tensorrt_version: measured-on-target
+  power_mode: measured-on-target
+  clock_policy: measured-on-target
+  container_image: target-native
+precision: fp16
+shape_profiles:
+  - schema_version: 1
+    input_name: tokens
+    minimum: [1, 33, 256]
+    optimum: [1, 33, 256]
+    maximum: [1, 33, 256]
+strongly_typed: true
+workspace_mib: 8192
+builder_optimization_level: 5
+flags:
+  - --verbose
+timing_boundary: engine_stage

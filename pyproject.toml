@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pi-quant"
-version = "0.3.0"
+version = "0.4.0"
 description = "A reproducible quantization control plane for vision-language-action models."
 readme = "README.md"
 license = "Apache-2.0"
@@ -65,5 +65,6 @@ warn_unused_ignores = true
 testpaths = ["tests"]
 markers = [
     "modelopt: requires the optional NVIDIA ModelOpt dependency",
+    "onnx: requires the optional ONNX dependency",
     "ort: requires the optional ONNX Runtime dependencies",
 ]

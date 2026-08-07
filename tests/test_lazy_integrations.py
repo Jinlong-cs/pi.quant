@@ -12,6 +12,7 @@ def test_optional_integrations_are_lazy() -> None:
     assert "fastwam" not in sys.modules
     assert "pyarrow" not in sys.modules
     assert "torch" not in sys.modules
+    assert "tensorrt" not in sys.modules
     assert ModelOptBackend.name == "modelopt"
     assert OrtDebugCapture is not None
     assert Pi05TorchAdapter is not None

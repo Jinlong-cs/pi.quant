@@ -29,6 +29,13 @@ candidate, and the analyzer/evidence layers preserve comparable results.
   fresh-model, explicit-backend, chunked-golden pattern for WAM sequences.
   Missing teacher-forced or latent callbacks fail fast instead of manufacturing
   a comparable signal.
+- `CompilerBackend` is the target compiler boundary. It receives a frozen
+  source/export candidate and returns build, graph, layer, artifact, command,
+  and reason-code evidence for one target. It does not quantize weights, choose
+  precision, own pi.cpp packaging, or decide acceptance.
+- `DeploymentEvaluator` measures one compiled artifact under one
+  `BenchmarkProtocol`. Engine-stage, standalone, server/client, and closed-loop
+  timing remain separate records.
 
 There is no automatic backend/model registry. The caller explicitly injects
 the adapter, providers, backend, analyzer, evaluator, and store. This prevents
@@ -64,6 +71,22 @@ episode-disjoint sequence manifests
   action + optional latent rollout divergence
 ```
 
+Target compiler studies add a downstream path:
+
+```text
+source/offline candidate evidence
+             |
+       frozen ONNX artifact
+             |
+ CompilationPlan -> target-local TensorRT build
+             |
+ ONNX graph + TensorRT layer + artifact evidence
+             |
+ StageTimingReport[] -> DeploymentCandidateManifest
+             |
+ pi.cpp handoff pending human promotion
+```
+
 ## Stable identities
 
 Recipes select semantic logical IDs such as `vlm.block.09.attention.q`; the
@@ -81,7 +104,7 @@ before a study can be validated.
 The reference QDQ backend remains a synthetic harness. ModelOpt is the first
 real candidate backend. ORT is a temporary-graph capture integration, not a
 quantizer. FastWAM temporal execution is an explicit optional source
-integration; it does not imply a world model is available. TensorRT compilation,
-target benchmark, pi.cpp runtime packaging, server/client operation, and real
-closed loop are later layers and do not belong to v0.2/v0.3 source/offline
-claims.
+integration; it does not imply a world model is available. TensorRT compilation
+is now a target evidence layer, but pi.cpp runtime packaging, server/client
+operation, full closed loop, and human acceptance remain outside the compiler
+boundary.

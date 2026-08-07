@@ -24,3 +24,10 @@ and execution callbacks are injected by the caller. Teacher-forced execution
 and world-latent capture are required only when a study claims those signals;
 missing source capabilities remain pending and cannot be replaced by synthetic
 or fabricated outputs.
+
+v0.4 adds the target compiler evidence boundary. TensorRT/ONNX work belongs in
+optional integrations and external Task Contract artifacts. Capability probes,
+build records, layer inspection, stage timing, server/client timing and
+closed-loop promotion are separate evidence lanes. Do not commit hardware
+scripts, generated engines, ONNX assets, traces, logs or machine-specific
+identity files.

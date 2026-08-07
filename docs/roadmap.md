@@ -7,7 +7,7 @@ Each version is a separate serial feature PR.
 | v0.1 | Contracts, ModelOpt/ORT boundaries, synthetic vertical workflow | Offline tests and structured evidence |
 | v0.2 | Real Pi0.5/LIBERO manifests, FP golden, semantic captures, hierarchical sensitivity | Source parity, deterministic replay, coverage, and selective recovery |
 | v0.3 | FastWAM/WAM temporal calibration and rollout-aware metrics | Temporal divergence, calibration controls, and task-evaluator boundary |
-| v0.4 | AGX Ampere INT8 and RTX 5090 Blackwell FP8/NVFP4 compiler evidence | Target-local parity and timing gates |
+| v0.4 | Target compiler contracts, ONNX/TensorRT inspection, deployment handoff, AGX/RTX 5090 capability gates | Target-local graph/build/timing evidence with unsupported states |
 | v0.5 | Mixed-precision search, candidate ranking, LIBERO promotion | Comparable deployment and closed-loop evidence |
 | v1.0 | Stable plugin API and production artifact lineage | Cross-model and hardware promotion gates |
 
@@ -17,6 +17,8 @@ feature that introduces them.
 
 Versions are serial feature PRs. v0.3 starts only after v0.2 merges; v0.4 starts
 only after both real model studies exist; v0.5 consumes measured source
-sensitivity and target cost rather than parameter/FLOP guesses. QAT, pruning,
-distillation, step reduction, and custom kernels remain independent future
-features.
+sensitivity and target cost rather than parameter/FLOP guesses. v0.4 can
+publish target compiler plumbing and capability probes while AGX/RTX builds
+remain `pending`; it cannot call those probes latency or deployment evidence.
+QAT, pruning, distillation, step reduction, and custom kernels remain
+independent future features.

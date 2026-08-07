@@ -9,9 +9,9 @@ from pathlib import Path
 
 import numpy as np
 
-from piquant import __version__, load_compilation_plan, load_plan
+from piquant import __version__, load_compilation_plan, load_plan, load_promotion_plan, load_search_plan
 from piquant.analysis import NumpyNumericalAnalyzer
-from piquant.contracts import ModelSpec
+from piquant.contracts import CandidateRecord, ModelSpec, ParetoFrontRecord, search_source_objectives
 from piquant.deployment import validate_deployment_manifest
 from piquant.evidence import (
     load_study,
@@ -22,6 +22,8 @@ from piquant.evidence import (
 )
 from piquant.inspection import inspect_onnx_model
 from piquant.integrations import TensorRTCliCompiler, build_trtexec_command, summarize_tensorrt_layers
+from piquant.promotion import build_promotion_plan, next_promotion_gate
+from piquant.search import apply_search_constraints, generate_candidate_recipes, pareto_front, resolve_search_plan, validate_resume_identity
 
 
 def _doctor(_args: argparse.Namespace) -> int:
@@ -48,6 +50,26 @@ def _validate_plan(args: argparse.Namespace) -> int:
 def _validate_compilation_plan(args: argparse.Namespace) -> int:
     plan = load_compilation_plan(args.plan)
     print(plan.model_dump_json(indent=2))
+    return 0
+
+
+def _validate_search_plan(args: argparse.Namespace) -> int:
+    plan = resolve_search_plan(load_search_plan(args.plan))
+    print(plan.model_dump_json(indent=2))
+    return 0
+
+
+def _validate_promotion_plan(args: argparse.Namespace) -> int:
+    plan = load_promotion_plan(args.plan)
+    next_gate = (
+        next(gate for gate in plan.gates if gate.status in {"rejected", "unsupported"})
+        if plan.status == "rejected"
+        else None
+        if plan.status == "measured"
+        else next_promotion_gate(plan)
+    )
+    payload = {"plan": plan.model_dump(mode="json"), "next_gate": None if next_gate is None else next_gate.model_dump(mode="json")}
+    print(json.dumps(payload, indent=2))
     return 0
 
 
@@ -112,6 +134,71 @@ def _validate_deployment(args: argparse.Namespace) -> int:
     return 0
 
 
+def _search(args: argparse.Namespace) -> int:
+    plan = resolve_search_plan(load_search_plan(args.plan))
+    payload = {
+        "plan_id": plan.plan_id,
+        "plan_hash": plan.plan_hash,
+        "recipes": [recipe.model_dump(mode="json") for recipe in generate_candidate_recipes(plan)],
+        "note": "Recipe generation does not run a backend, compiler, benchmark, or promotion gate.",
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def _load_candidate_records(path: Path) -> list[CandidateRecord]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    raw = data.get("candidates") if isinstance(data, dict) else data
+    if not isinstance(raw, list):
+        raise ValueError("candidate record input must be a JSON list or an object with candidates")
+    return [CandidateRecord.model_validate(item) for item in raw]
+
+
+def _rank(args: argparse.Namespace) -> int:
+    candidates = _load_candidate_records(args.candidates)
+    if not candidates:
+        raise ValueError("rank requires at least one candidate record")
+    plan = resolve_search_plan(load_search_plan(args.search_plan))
+    validate_resume_identity(plan, candidates)
+    constrained = [apply_search_constraints(plan, candidate, boundary=args.boundary) for candidate in candidates]
+    objectives = search_source_objectives(plan) if args.boundary == "source" else plan.objectives
+    front = pareto_front(
+        constrained,
+        boundary=args.boundary,
+        objectives=objectives,
+        model=plan.model,
+        target=plan.target,
+        front_id=args.front_id,
+        search_plan_hash=plan.plan_hash or "",
+    )
+    payload = {
+        "front": front.model_dump(mode="json"),
+        "candidates": [candidate.model_dump(mode="json") for candidate in constrained],
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def _promote(args: argparse.Namespace) -> int:
+    candidate = CandidateRecord.model_validate_json(args.candidate.read_text(encoding="utf-8"))
+    baseline = CandidateRecord.model_validate_json(args.baseline_candidate.read_text(encoding="utf-8"))
+    target_front = ParetoFrontRecord.model_validate_json(args.target_front.read_text(encoding="utf-8"))
+    search_plan = resolve_search_plan(load_search_plan(args.search_plan))
+    plan = build_promotion_plan(
+        candidate,
+        baseline=baseline,
+        target_front=target_front,
+        search_plan=search_plan,
+        plan_id=args.plan_id,
+    )
+    payload = {
+        "plan": plan.model_dump(mode="json"),
+        "next_gate": next_promotion_gate(plan).model_dump(mode="json"),
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="piquant", description="VLA quantization evidence tools")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -126,6 +213,14 @@ def build_parser() -> argparse.ArgumentParser:
     validate_compilation_plan = subparsers.add_parser("validate-compilation-plan", help="parse and validate a target compiler plan")
     validate_compilation_plan.add_argument("plan", type=Path)
     validate_compilation_plan.set_defaults(handler=_validate_compilation_plan)
+
+    validate_search_plan = subparsers.add_parser("validate-search-plan", help="parse and hash a v0.5 search plan")
+    validate_search_plan.add_argument("plan", type=Path)
+    validate_search_plan.set_defaults(handler=_validate_search_plan)
+
+    validate_promotion_plan = subparsers.add_parser("validate-promotion-plan", help="validate a pending-first promotion plan")
+    validate_promotion_plan.add_argument("plan", type=Path)
+    validate_promotion_plan.set_defaults(handler=_validate_promotion_plan)
 
     inspect_onnx = subparsers.add_parser("inspect-onnx", help="inspect ONNX graph operators without compiling")
     inspect_onnx.add_argument("model", type=Path)
@@ -176,6 +271,25 @@ def build_parser() -> argparse.ArgumentParser:
     validate_deployment.add_argument("manifest", type=Path)
     validate_deployment.add_argument("--check-artifacts", action="store_true")
     validate_deployment.set_defaults(handler=_validate_deployment)
+
+    search = subparsers.add_parser("search", help="generate bounded candidate recipes from an explicit search plan")
+    search.add_argument("plan", type=Path)
+    search.set_defaults(handler=_search)
+
+    rank = subparsers.add_parser("rank", help="compute a transparent Pareto front from candidate records")
+    rank.add_argument("candidates", type=Path)
+    rank.add_argument("--boundary", choices=["source", "target"], required=True)
+    rank.add_argument("--search-plan", type=Path, required=True, help="frozen SearchPlan that owns the objectives and candidates")
+    rank.add_argument("--front-id", default="pareto-front")
+    rank.set_defaults(handler=_rank)
+
+    promote = subparsers.add_parser("promote", help="emit a pending-first promotion plan; never runs a gate")
+    promote.add_argument("candidate", type=Path)
+    promote.add_argument("--baseline-candidate", type=Path, required=True, help="matched measured FP target control")
+    promote.add_argument("--target-front", type=Path, required=True, help="target Pareto front containing the candidate and baseline")
+    promote.add_argument("--search-plan", type=Path, required=True, help="frozen SearchPlan that owns the candidate and benchmark")
+    promote.add_argument("--plan-id")
+    promote.set_defaults(handler=_promote)
     return parser
 
 

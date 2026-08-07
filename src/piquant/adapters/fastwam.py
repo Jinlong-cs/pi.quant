@@ -212,11 +212,13 @@ class FastWAMSourceAdapter:
             ("action_expert", "action_backbone", ["batch", "denoise_step", "token", "hidden"]),
         ):
             for index in self._block_indices(expert):
-                path = f"{expert}.blocks.{index}"
-                if path in self._all_modules:
+                for suffix, path in (
+                    ("self_attn_out", f"{expert}.blocks.{index}.self_attn.o"),
+                    ("ffn_out", f"{expert}.blocks.{index}.ffn.2"),
+                ):
                     specs.append(
                         TemporalCaptureSpec(
-                            logical_id=f"{component}.block.{index:02d}.output",
+                            logical_id=f"{component}.block.{index:02d}.{suffix}",
                             backend_path=path,
                             component=component,
                             kind="activation",

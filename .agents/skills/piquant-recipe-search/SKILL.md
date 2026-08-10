@@ -38,6 +38,8 @@ Running one already-selected recipe; use `piquant-ptq` instead.
    compiler budget with source-Pareto search candidates in the deterministic
    sensitivity-guided generation order. Rebuild the Pareto front from target-local
    build, parity, timing, memory, coverage, and evidence level.
+   Keep a measured negative rollback cost when restoring precision improves
+   target latency; treat it as no latency penalty instead of clamping or rejecting it.
    FP is an unconstrained comparator; broad/manual source rejection remains
    recorded but does not erase those explicit target controls. Generated search
    candidates must pass the source gate.

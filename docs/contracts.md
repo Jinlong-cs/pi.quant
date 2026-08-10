@@ -108,7 +108,9 @@ owner can mark deployment evidence `accepted`.
   complete identity to a canonical hash. Source and target quality, source and
   target coverage, target latency, and target memory/size hard constraints are
   mandatory; shape, finite, build, and implementation parity remain structural
-  measured-candidate gates.
+  measured-candidate gates. A measured rollback cost may be negative when the
+  restored precision also improves target latency; such a mutation has no
+  latency penalty in sensitivity-guided generation.
 - `CandidateRecipe` is a read-only precision map with parent/mutation lineage
   and a canonical recipe hash. `CandidateRecord` carries the owning search-plan
   hash, four split fingerprints, source and target metrics, artifact lineage,

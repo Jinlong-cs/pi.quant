@@ -86,7 +86,7 @@ def _search_plan() -> SearchPlan:
             from_precision="int8",
             to_precision="fp16",
             quality_recovery=0.2,
-            latency_cost_ms=1.0,
+            latency_cost_ms=-0.25,
             source_evidence=_artifact("language-source", "5"),
             target_cost_evidence=_artifact("language-target", "6"),
         ),
@@ -253,6 +253,7 @@ def test_v05_search_plan_is_deterministic_and_split_disjoint() -> None:
     assert [(recipe.recipe_id, recipe.recipe_hash) for recipe in first] == [(recipe.recipe_id, recipe.recipe_hash) for recipe in second]
     assert len(first) <= plan.budget.max_source_candidates
     assert len({tuple(sorted(recipe.precision_map.items())) for recipe in first}) == len(first)
+    assert first[3].mutation == ("language:int8->fp16",)
     with pytest.raises(TypeError):
         plan.controls[0].precision_map["vision"] = "int8"  # type: ignore[index]
     overlapping = plan.split_audit.model_dump(mode="json")

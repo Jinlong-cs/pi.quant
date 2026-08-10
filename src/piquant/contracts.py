@@ -1095,14 +1095,17 @@ class SearchConstraint(Contract):
 
 
 class SensitivitySignal(Contract):
-    """One measured quality-recovery/target-cost signal used to order mutations."""
+    """One measured quality-recovery/target-cost signal used to order mutations.
+
+    A negative target cost is valid when restoring precision also improves target latency.
+    """
 
     schema_version: Literal[1] = 1
     group: str = Field(min_length=1)
     from_precision: PrecisionMode
     to_precision: PrecisionMode
     quality_recovery: float = Field(gt=0.0, allow_inf_nan=False)
-    latency_cost_ms: float = Field(ge=0.0, allow_inf_nan=False)
+    latency_cost_ms: float = Field(allow_inf_nan=False)
     source_evidence: ArtifactRef
     target_cost_evidence: ArtifactRef
 

@@ -166,9 +166,42 @@ uv run piquant compile-tensorrt recipes/deployment/agx-orin-tensorrt-int8.yaml \
 uv run piquant inspect-trt-layers /external/artifacts/agx-build/agx-orin-tensorrt-int8-template.layers.json
 ```
 
-The current AGX/RTX 5090 hardware build gates remain pending until target
-storage, ownership, TensorRT environment, parity and benchmark protocols are
-verified. Capability probes are not performance results.
+Target capability, build, parity, stage timing, standalone timing,
+server/client, closed-loop, and human acceptance remain separate evidence
+lanes. A valid compiler record or handoff manifest is not deployment success.
+
+## v0.5 mixed-precision search and promotion
+
+v0.5 adds a deterministic control plane around measured source sensitivity and
+target-local compiler cost:
+
+- `SearchPlan` freezes one model, target, ABI, benchmark, four data splits,
+  supported precision space, semantic groups, hard constraints, budgets, and
+  exactly three controls: FP, broad quant, and manual selective;
+- candidate generation restores measured semantic groups from the broad
+  control under an explicit beam/source/build budget;
+- source filtering and target ranking are separate, uncertainty-aware Pareto
+  fronts without a hidden weighted score;
+- resume requires the same plan hash, generated recipe, split fingerprints,
+  model, target, and terminal evidence identity;
+- `PromotionPlan` binds a measured FP target baseline and non-dominated target
+  candidate, then advances through ordered pending-first gates. Gate40 and
+  full400 require external approval and remain outside automatic execution.
+
+Search plans and all candidate/evidence JSON stay in the external artifact
+root. The CLI validates and transforms explicit records; it does not discover
+models, invoke a backend/compiler implicitly, or accept a candidate:
+
+```bash
+uv run piquant validate-search-plan /external/artifacts/search-plan.json
+uv run piquant search /external/artifacts/search-plan.json
+uv run piquant rank /external/artifacts/candidates.json \
+  --boundary target --search-plan /external/artifacts/search-plan.json
+uv run piquant promote /external/artifacts/candidate.json \
+  --baseline-candidate /external/artifacts/fp-control.json \
+  --target-front /external/artifacts/target-front.json \
+  --search-plan /external/artifacts/search-plan.json
+```
 
 ## Architecture
 
@@ -192,5 +225,6 @@ coding policy copied from the project-level policy source.
 
 ## Roadmap
 
-The version sequence is intentionally serial. Mixed-precision promotion remains
-a separate future feature PR; see [docs/roadmap.md](docs/roadmap.md).
+The version sequence is intentionally serial. v0.5 consumes measured v0.2-v0.4
+evidence and cannot fill a missing source study or target cost with a proxy; see
+[docs/roadmap.md](docs/roadmap.md).

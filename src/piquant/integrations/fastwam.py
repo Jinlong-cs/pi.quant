@@ -108,7 +108,6 @@ class FastWAMCaptureRunner:
             "prompt": batch.get("prompt"),
             "input_image": batch["input_image"],
             "action_horizon": int(batch.get("action_horizon", self.contract.action_horizon)),
-            "num_video_frames": int(batch.get("num_video_frames", self.contract.num_video_frames)),
             "num_inference_steps": int(batch.get("num_inference_steps", self.contract.num_inference_steps)),
             "proprio": batch.get("proprio"),
             "context": batch.get("context"),

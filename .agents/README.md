@@ -31,3 +31,10 @@ build records, layer inspection, stage timing, server/client timing and
 closed-loop promotion are separate evidence lanes. Do not commit hardware
 scripts, generated engines, ONNX assets, traces, logs or machine-specific
 identity files.
+
+v0.5 adds deterministic mixed-precision search and pending-first promotion.
+Search plans require four disjoint data splits, measured source recovery and
+target-local cost, explicit budgets, and matched FP/broad/manual controls.
+Source and target Pareto fronts are distinct. Gate40/full400 require external
+approval, and no agent or machine record can assign human acceptance. Keep
+plans, candidates, experiment runners, manifests, and results outside Git.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from piquant.adapters.fastwam import FastWAMSourceAdapter, FastWAMSourceConfig
 from piquant.contracts import ActionSchema, SequenceRef, TemporalCalibrationManifest, TemporalCaptureSpec
 from piquant.integrations.fastwam import FastWAMCaptureRunner
 from piquant.temporal import (
@@ -211,3 +212,79 @@ def test_fastwam_capture_provider_preserves_action_abi() -> None:
             [action],
             mode="iterative",
         )
+
+
+def test_fastwam_default_runner_matches_current_source_infer_action_signature() -> None:
+    torch = pytest.importorskip("torch")
+    action = TemporalCaptureSpec(
+        logical_id="action.output",
+        backend_path="$infer_action",
+        component="action_boundary",
+        kind="action",
+        axes=["batch", "horizon", "action_dim"],
+    )
+
+    class CurrentFastWAMModel:
+        def named_modules(self) -> list[tuple[str, object]]:
+            return []
+
+        def infer_action(
+            self,
+            *,
+            prompt: object,
+            input_image: object,
+            action_horizon: int,
+            num_inference_steps: int,
+            proprio: object,
+            context: object,
+            context_mask: object,
+            seed: object,
+            rand_device: str,
+            sigma_shift: object,
+            tiled: bool,
+        ) -> dict[str, object]:
+            assert action_horizon == 32
+            assert num_inference_steps == 10
+            return {"action": torch.zeros((32, 7))}
+
+    result = FastWAMCaptureRunner().run(CurrentFastWAMModel(), {"input_image": object(), "prompt": "test"}, [action], mode="iterative")
+    assert result["action.output"].shape == (1, 32, 7)
+
+
+def test_fastwam_adapter_captures_executed_block_submodules() -> None:
+    torch = pytest.importorskip("torch")
+
+    class Attention(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.o = torch.nn.Linear(2, 2)
+
+    class Block(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.self_attn = Attention()
+            self.ffn = torch.nn.Sequential(torch.nn.Linear(2, 2), torch.nn.ReLU(), torch.nn.Linear(2, 2))
+
+    class Expert(torch.nn.Module):
+        def __init__(self, *, action: bool) -> None:
+            super().__init__()
+            self.blocks = torch.nn.ModuleList([Block(), Block(), Block()])
+            if action:
+                self.action_encoder = torch.nn.Linear(2, 2)
+                self.head = torch.nn.Linear(2, 2)
+            else:
+                self.text_embedding = torch.nn.Linear(2, 2)
+
+    class Model(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.video_expert = Expert(action=False)
+            self.action_expert = Expert(action=True)
+            self.proprio_encoder = torch.nn.Linear(2, 2)
+
+    adapter = FastWAMSourceAdapter(FastWAMSourceConfig(model_factory=Model))
+    bindings = {(spec.logical_id, spec.backend_path) for spec in adapter.temporal_capture_specs()}
+    for component, expert in (("video_backbone", "video_expert"), ("action_backbone", "action_expert")):
+        for index in range(3):
+            assert (f"{component}.block.{index:02d}.self_attn_out", f"{expert}.blocks.{index}.self_attn.o") in bindings
+            assert (f"{component}.block.{index:02d}.ffn_out", f"{expert}.blocks.{index}.ffn.2") in bindings

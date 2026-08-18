@@ -36,6 +36,13 @@ candidate, and the analyzer/evidence layers preserve comparable results.
 - `DeploymentEvaluator` measures one compiled artifact under one
   `BenchmarkProtocol`. Engine-stage, standalone, server/client, and closed-loop
   timing remain separate records.
+- `piquant.search` generates and evaluates immutable recipes through explicit
+  source and target callbacks. It owns budget enforcement, hard constraints,
+  deterministic resume, and Pareto construction; it does not implement PTQ,
+  compile an engine by itself, or select a human winner.
+- `piquant.promotion` creates an ordered pending-first gate plan from a measured
+  FP target control and non-dominated target candidate. It validates evidence
+  transitions but does not run pi.cpp, a simulator, Gate40, or full400.
 
 There is no automatic backend/model registry. The caller explicitly injects
 the adapter, providers, backend, analyzer, evaluator, and store. This prevents
@@ -87,6 +94,27 @@ source/offline candidate evidence
  pi.cpp handoff pending human promotion
 ```
 
+Mixed-precision search and promotion use the complete path without collapsing
+its evidence lanes:
+
+```text
+calibration | sensitivity | search-validation | promotion-reserved
+                              |
+      measured recovery + target-local group cost
+                              |
+   SearchPlan -> controls + bounded candidate recipes
+                              |
+ source metrics/constraints -> source Pareto -> explicit top-N
+                              |
+ target build/parity/timing -> target Pareto
+                              |
+ matched FP control + target candidate -> PromotionPlan
+                              |
+ mechanical -> offline -> target -> server/client -> approved gates
+                              |
+                     human acceptance
+```
+
 ## Stable identities
 
 Recipes select semantic logical IDs such as `vlm.block.09.attention.q`; the
@@ -106,5 +134,5 @@ real candidate backend. ORT is a temporary-graph capture integration, not a
 quantizer. FastWAM temporal execution is an explicit optional source
 integration; it does not imply a world model is available. TensorRT compilation
 is now a target evidence layer, but pi.cpp runtime packaging, server/client
-operation, full closed loop, and human acceptance remain outside the compiler
-boundary.
+operation, full closed loop, and human acceptance remain outside both the
+compiler and search boundaries.

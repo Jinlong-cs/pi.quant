@@ -1,8 +1,11 @@
 """Public contracts for the pi.quant VLA optimization control plane."""
 
 from piquant.contracts import (
+    ARTIFACT_LINEAGE_STAGES,
     ActionMetric,
     ActionSchema,
+    ArtifactLineageManifest,
+    ArtifactLineageNode,
     ArtifactRef,
     BenchmarkProtocol,
     CalibrationManifest,
@@ -57,19 +60,25 @@ from piquant.contracts import (
     TemporalStudyRecord,
     TensorMetric,
     TensorRTLayerReport,
+    artifact_lineage_hash,
     candidate_recipe_hash,
+    load_artifact_lineage,
     load_compilation_plan,
     load_deployment_manifest,
     load_plan,
     load_promotion_plan,
     load_search_plan,
+    resolve_artifact_lineage,
     search_plan_hash,
     search_source_objectives,
 )
 
 __all__ = [
+    "ARTIFACT_LINEAGE_STAGES",
     "ActionMetric",
     "ActionSchema",
+    "ArtifactLineageManifest",
+    "ArtifactLineageNode",
     "ArtifactRef",
     "BenchmarkProtocol",
     "CandidateMetrics",
@@ -124,14 +133,17 @@ __all__ = [
     "TensorMetric",
     "TensorRTLayerReport",
     "RolloutDivergenceReport",
+    "artifact_lineage_hash",
     "load_compilation_plan",
+    "load_artifact_lineage",
     "load_deployment_manifest",
     "load_promotion_plan",
     "load_plan",
     "load_search_plan",
+    "resolve_artifact_lineage",
     "candidate_recipe_hash",
     "search_plan_hash",
     "search_source_objectives",
 ]
 
-__version__ = "0.5.0"
+__version__ = "1.0.0"

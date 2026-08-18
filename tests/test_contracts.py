@@ -4,6 +4,8 @@ import pytest
 
 from piquant.contracts import (
     ActionSchema,
+    ArtifactLineageManifest,
+    ArtifactLineageNode,
     ArtifactRef,
     BenchmarkProtocol,
     CandidateMetrics,
@@ -22,8 +24,10 @@ from piquant.contracts import (
     SearchStudyRecord,
     SensitivitySignal,
     TargetFingerprint,
+    artifact_lineage_hash,
     fingerprint,
     load_plan,
+    resolve_artifact_lineage,
     search_plan_hash,
     search_source_objectives,
 )
@@ -42,6 +46,35 @@ from piquant.search import (
 
 def _artifact(kind: str, token: str) -> ArtifactRef:
     return ArtifactRef(kind=kind, path=f"/external/{kind}", sha256=token * 64)
+
+
+def _lineage() -> ArtifactLineageManifest:
+    nodes = [
+        ArtifactLineageNode(node_id="source", stage="source", artifact=_artifact("checkpoint", "1"), status="measured"),
+        ArtifactLineageNode(
+            node_id="calibration", stage="calibration", artifact=_artifact("calibration", "2"), parent_ids=["source"], status="measured"
+        ),
+        ArtifactLineageNode(
+            node_id="golden", stage="golden", artifact=_artifact("golden", "3"), parent_ids=["calibration"], status="measured"
+        ),
+        ArtifactLineageNode(node_id="recipe", stage="recipe", artifact=_artifact("recipe", "4"), parent_ids=["golden"], status="measured"),
+        ArtifactLineageNode(
+            node_id="candidate",
+            stage="candidate",
+            artifact=_artifact("candidate", "5"),
+            parent_ids=["recipe", "golden"],
+            status="measured",
+        ),
+    ]
+    return ArtifactLineageManifest(
+        manifest_id="candidate-lineage",
+        model=ModelSpec(model_id="pi05", family="vla", framework="torch", revision="test", action_dim=7, action_horizon=50),
+        candidate_id="candidate",
+        nodes=nodes,
+        terminal_node_ids=["candidate"],
+        evidence_boundary="candidate",
+        status="measured",
+    )
 
 
 def _search_plan() -> SearchPlan:
@@ -242,6 +275,110 @@ def test_golden_manifest_rejects_duplicate_sample_lineage() -> None:
             seed=1,
             status="measured",
         )
+
+
+def test_v10_artifact_lineage_is_hash_stable_and_fail_fast() -> None:
+    lineage = resolve_artifact_lineage(_lineage())
+    assert lineage.lineage_hash == artifact_lineage_hash(lineage)
+    reordered = lineage.model_dump(mode="json", exclude={"lineage_hash"})
+    reordered["nodes"] = list(reversed(reordered["nodes"]))
+    candidate = next(node for node in reordered["nodes"] if node["node_id"] == "candidate")
+    candidate["parent_ids"] = list(reversed(candidate["parent_ids"]))
+    assert artifact_lineage_hash(ArtifactLineageManifest.model_validate(reordered)) == lineage.lineage_hash
+
+    unknown_parent = lineage.model_dump(mode="json", exclude={"lineage_hash"})
+    unknown_parent["nodes"][1]["parent_ids"] = ["missing"]
+    with pytest.raises(ValueError, match="unknown parents"):
+        ArtifactLineageManifest.model_validate(unknown_parent)
+
+    stage_regression = lineage.model_dump(mode="json", exclude={"lineage_hash"})
+    stage_regression["nodes"][1]["parent_ids"] = ["recipe"]
+    with pytest.raises(ValueError, match="parents must precede"):
+        ArtifactLineageManifest.model_validate(stage_regression)
+
+    nonmeasured_parent = lineage.model_dump(mode="json", exclude={"lineage_hash"})
+    nonmeasured_parent["nodes"][0]["status"] = "pending"
+    with pytest.raises(ValueError, match="measured parents"):
+        ArtifactLineageManifest.model_validate(nonmeasured_parent)
+
+    missing_leaf = lineage.model_dump(mode="json", exclude={"lineage_hash"})
+    missing_leaf["nodes"].append(
+        {
+            "node_id": "rejected-candidate",
+            "stage": "candidate",
+            "artifact": _artifact("rejected", "6").model_dump(mode="json"),
+            "parent_ids": ["recipe"],
+            "status": "rejected",
+            "reason_code": "QUALITY_GATE_FAILED",
+        }
+    )
+    with pytest.raises(ValueError, match="every leaf node"):
+        ArtifactLineageManifest.model_validate(missing_leaf)
+
+    continued_rejection = lineage.model_dump(mode="json", exclude={"lineage_hash"})
+    candidate = next(node for node in continued_rejection["nodes"] if node["node_id"] == "candidate")
+    candidate.update({"status": "rejected", "reason_code": "QUALITY_GATE_FAILED"})
+    continued_rejection["nodes"].append(
+        {
+            "node_id": "pending-export",
+            "stage": "export",
+            "artifact": _artifact("export", "6").model_dump(mode="json"),
+            "parent_ids": ["candidate"],
+            "status": "pending",
+        }
+    )
+    continued_rejection.update({"terminal_node_ids": ["pending-export"], "evidence_boundary": "export", "status": "pending"})
+    with pytest.raises(ValueError, match="rejected or unsupported lineage nodes cannot have children"):
+        ArtifactLineageManifest.model_validate(continued_rejection)
+
+    missing_stage = lineage.model_dump(mode="json", exclude={"lineage_hash"})
+    missing_stage["nodes"] = [node for node in missing_stage["nodes"] if node["node_id"] != "golden"]
+    next(node for node in missing_stage["nodes"] if node["node_id"] == "recipe")["parent_ids"] = ["calibration"]
+    next(node for node in missing_stage["nodes"] if node["node_id"] == "candidate")["parent_ids"] = ["recipe"]
+    with pytest.raises(ValueError, match="missing required stages"):
+        ArtifactLineageManifest.model_validate(missing_stage)
+
+    false_acceptance = lineage.model_dump(mode="json", exclude={"lineage_hash"})
+    false_acceptance.update({"status": "accepted", "human_acceptance": "accepted"})
+    with pytest.raises(ValueError, match="measured promotion evidence"):
+        ArtifactLineageManifest.model_validate(false_acceptance)
+
+    bad_hash = lineage.model_dump(mode="json")
+    bad_hash["lineage_hash"] = "f" * 64
+    with pytest.raises(ValueError, match="lineage_hash does not match"):
+        ArtifactLineageManifest.model_validate(bad_hash)
+
+
+def test_v10_artifact_lineage_acceptance_requires_complete_promotion() -> None:
+    base = _lineage()
+    nodes = list(base.nodes)
+    parent_id = "candidate"
+    for index, stage in enumerate(("export", "compiler", "benchmark", "server_client", "closed_loop", "promotion"), start=6):
+        node_id = f"{stage}-evidence"
+        nodes.append(
+            ArtifactLineageNode(
+                node_id=node_id,
+                stage=stage,
+                artifact=_artifact(stage, f"{index:x}"),
+                parent_ids=[parent_id],
+                status="measured",
+            )
+        )
+        parent_id = node_id
+    accepted = resolve_artifact_lineage(
+        ArtifactLineageManifest(
+            manifest_id=base.manifest_id,
+            model=base.model,
+            candidate_id=base.candidate_id,
+            nodes=nodes,
+            terminal_node_ids=[parent_id],
+            evidence_boundary="promotion",
+            status="accepted",
+            human_acceptance="accepted",
+        )
+    )
+    assert accepted.status == "accepted"
+    assert accepted.lineage_hash == artifact_lineage_hash(accepted)
 
 
 def test_v05_search_plan_is_deterministic_and_split_disjoint() -> None:

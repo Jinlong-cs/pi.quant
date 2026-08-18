@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pi-quant"
-version = "0.5.0"
+version = "1.0.0"
 description = "A reproducible quantization control plane for vision-language-action models."
 readme = "README.md"
 license = "Apache-2.0"
@@ -38,6 +38,9 @@ Repository = "https://github.com/Jinlong-cs/pi.quant"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+piquant = ["py.typed"]
 
 [tool.ruff]
 target-version = "py310"

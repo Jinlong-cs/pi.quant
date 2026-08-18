@@ -12,7 +12,7 @@ import numpy as np
 from piquant import __version__, load_compilation_plan, load_plan, load_promotion_plan, load_search_plan
 from piquant.analysis import NumpyNumericalAnalyzer
 from piquant.contracts import CandidateRecord, ModelSpec, ParetoFrontRecord, search_source_objectives
-from piquant.deployment import validate_deployment_manifest
+from piquant.deployment import validate_artifact_lineage, validate_deployment_manifest
 from piquant.evidence import (
     load_study,
     package_import_report,
@@ -134,6 +134,11 @@ def _validate_deployment(args: argparse.Namespace) -> int:
     return 0
 
 
+def _validate_lineage(args: argparse.Namespace) -> int:
+    print(json.dumps(validate_artifact_lineage(args.manifest, check_artifacts=args.check_artifacts), indent=2, sort_keys=True))
+    return 0
+
+
 def _search(args: argparse.Namespace) -> int:
     plan = resolve_search_plan(load_search_plan(args.plan))
     payload = {
@@ -201,6 +206,7 @@ def _promote(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="piquant", description="VLA quantization evidence tools")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     doctor = subparsers.add_parser("doctor", help="print local package and optional-dependency status")
@@ -214,7 +220,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate_compilation_plan.add_argument("plan", type=Path)
     validate_compilation_plan.set_defaults(handler=_validate_compilation_plan)
 
-    validate_search_plan = subparsers.add_parser("validate-search-plan", help="parse and hash a v0.5 search plan")
+    validate_search_plan = subparsers.add_parser("validate-search-plan", help="parse and hash a search plan")
     validate_search_plan.add_argument("plan", type=Path)
     validate_search_plan.set_defaults(handler=_validate_search_plan)
 
@@ -271,6 +277,11 @@ def build_parser() -> argparse.ArgumentParser:
     validate_deployment.add_argument("manifest", type=Path)
     validate_deployment.add_argument("--check-artifacts", action="store_true")
     validate_deployment.set_defaults(handler=_validate_deployment)
+
+    validate_lineage = subparsers.add_parser("validate-lineage", help="validate a production artifact-lineage manifest")
+    validate_lineage.add_argument("manifest", type=Path)
+    validate_lineage.add_argument("--check-artifacts", action="store_true")
+    validate_lineage.set_defaults(handler=_validate_lineage)
 
     search = subparsers.add_parser("search", help="generate bounded candidate recipes from an explicit search plan")
     search.add_argument("plan", type=Path)

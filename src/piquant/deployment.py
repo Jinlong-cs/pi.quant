@@ -9,7 +9,15 @@ from pathlib import Path
 
 import numpy as np
 
-from piquant.contracts import DeploymentCandidateManifest, LatencyDistribution, load_deployment_manifest
+from piquant.contracts import (
+    ARTIFACT_LINEAGE_STAGES,
+    ArtifactLineageManifest,
+    DeploymentCandidateManifest,
+    LatencyDistribution,
+    load_artifact_lineage,
+    load_deployment_manifest,
+    resolve_artifact_lineage,
+)
 
 
 def latency_distribution(values_ms: Sequence[float]) -> LatencyDistribution:
@@ -52,6 +60,15 @@ def validate_deployment_manifest(path: str | Path, *, check_artifacts: bool = Fa
     return summarize_deployment_manifest(manifest)
 
 
+def validate_artifact_lineage(path: str | Path, *, check_artifacts: bool = False) -> dict[str, object]:
+    manifest = resolve_artifact_lineage(load_artifact_lineage(path))
+    if check_artifacts:
+        for node in manifest.nodes:
+            if _sha256(node.artifact.path) != node.artifact.sha256:
+                raise ValueError(f"lineage artifact SHA256 differs: {node.node_id}:{node.artifact.path}")
+    return summarize_artifact_lineage(manifest)
+
+
 def summarize_deployment_manifest(manifest: DeploymentCandidateManifest) -> dict[str, object]:
     return {
         "manifest_id": manifest.manifest_id,
@@ -67,9 +84,34 @@ def summarize_deployment_manifest(manifest: DeploymentCandidateManifest) -> dict
     }
 
 
+def summarize_artifact_lineage(manifest: ArtifactLineageManifest) -> dict[str, object]:
+    resolved = resolve_artifact_lineage(manifest)
+    return {
+        "manifest_id": resolved.manifest_id,
+        "lineage_hash": resolved.lineage_hash,
+        "status": resolved.status,
+        "model_id": resolved.model.model_id,
+        "candidate_id": resolved.candidate_id,
+        "evidence_boundary": resolved.evidence_boundary,
+        "node_count": len(resolved.nodes),
+        "stages": [stage for stage in ARTIFACT_LINEAGE_STAGES if any(node.stage == stage for node in resolved.nodes)],
+        "terminal_node_ids": resolved.terminal_node_ids,
+        "human_acceptance": resolved.human_acceptance,
+    }
+
+
 def write_deployment_manifest(manifest: DeploymentCandidateManifest, path: str | Path) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.tmp")
     temporary.write_text(json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(destination)
+
+
+def write_artifact_lineage(manifest: ArtifactLineageManifest, path: str | Path) -> None:
+    resolved = resolve_artifact_lineage(manifest)
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.tmp")
+    temporary.write_text(json.dumps(resolved.model_dump(mode="json"), indent=2, sort_keys=True) + "\n", encoding="utf-8")
     temporary.replace(destination)

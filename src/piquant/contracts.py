@@ -545,6 +545,169 @@ class ArtifactRef(Contract):
     sha256: str = Field(min_length=64, max_length=64)
 
 
+ArtifactLineageStage = Literal[
+    "source",
+    "calibration",
+    "golden",
+    "recipe",
+    "candidate",
+    "export",
+    "compiler",
+    "benchmark",
+    "server_client",
+    "closed_loop",
+    "promotion",
+]
+LineageNodeStatus = Literal["pending", "measured", "rejected", "unsupported"]
+ARTIFACT_LINEAGE_STAGES: tuple[ArtifactLineageStage, ...] = (
+    "source",
+    "calibration",
+    "golden",
+    "recipe",
+    "candidate",
+    "export",
+    "compiler",
+    "benchmark",
+    "server_client",
+    "closed_loop",
+    "promotion",
+)
+_LINEAGE_STAGE_ORDER: dict[str, int] = {stage: index for index, stage in enumerate(ARTIFACT_LINEAGE_STAGES)}
+
+
+class ArtifactLineageNode(Contract):
+    """One immutable artifact and its direct parents in a production lineage."""
+
+    schema_version: Literal[1] = 1
+    node_id: str = Field(min_length=1)
+    stage: ArtifactLineageStage
+    artifact: ArtifactRef
+    parent_ids: list[str] = Field(default_factory=list)
+    status: LineageNodeStatus
+    reason_code: str | None = None
+
+    @model_validator(mode="after")
+    def validate_node(self) -> ArtifactLineageNode:
+        if len(self.parent_ids) != len(set(self.parent_ids)):
+            raise ValueError("artifact lineage parent IDs must be unique")
+        if self.node_id in self.parent_ids:
+            raise ValueError("artifact lineage node cannot parent itself")
+        if self.status in {"rejected", "unsupported"} and not self.reason_code:
+            raise ValueError("rejected or unsupported lineage nodes require reason_code")
+        return self
+
+
+class ArtifactLineageManifest(Contract):
+    """Hash-stable source-to-promotion artifact graph with an explicit evidence boundary."""
+
+    schema_version: Literal[1] = 1
+    manifest_id: str = Field(min_length=1)
+    model: ModelSpec
+    candidate_id: str = Field(min_length=1)
+    nodes: list[ArtifactLineageNode] = Field(min_length=1)
+    terminal_node_ids: list[str] = Field(min_length=1)
+    evidence_boundary: ArtifactLineageStage
+    status: Literal["pending", "measured", "rejected", "accepted"]
+    human_acceptance: Literal["pending", "accepted", "rejected"] = "pending"
+    lineage_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    notes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_lineage(self) -> ArtifactLineageManifest:
+        node_ids = [node.node_id for node in self.nodes]
+        if len(node_ids) != len(set(node_ids)):
+            raise ValueError("artifact lineage node IDs must be unique")
+        if len(self.terminal_node_ids) != len(set(self.terminal_node_ids)):
+            raise ValueError("artifact lineage terminal node IDs must be unique")
+
+        nodes = {node.node_id: node for node in self.nodes}
+        if unknown := sorted(set(self.terminal_node_ids) - set(nodes)):
+            raise ValueError(f"artifact lineage references unknown terminal nodes: {unknown!r}")
+        children: dict[str, set[str]] = {node_id: set() for node_id in nodes}
+        for node in self.nodes:
+            if node.stage == "source" and node.parent_ids:
+                raise ValueError("source lineage nodes cannot have parents")
+            if node.stage != "source" and not node.parent_ids:
+                raise ValueError("non-source lineage nodes require at least one parent")
+            if unknown := sorted(set(node.parent_ids) - set(nodes)):
+                raise ValueError(f"artifact lineage node {node.node_id!r} references unknown parents: {unknown!r}")
+            for parent_id in node.parent_ids:
+                parent = nodes[parent_id]
+                if _LINEAGE_STAGE_ORDER[parent.stage] >= _LINEAGE_STAGE_ORDER[node.stage]:
+                    raise ValueError("artifact lineage parents must precede their child stage")
+                if node.status == "measured" and parent.status != "measured":
+                    raise ValueError("measured lineage nodes require measured parents")
+                children[parent_id].add(node.node_id)
+        if not any(node.stage == "source" for node in self.nodes):
+            raise ValueError("artifact lineage requires at least one source node")
+        if continued := sorted(
+            node_id for node_id, node_children in children.items() if node_children and nodes[node_id].status in {"rejected", "unsupported"}
+        ):
+            raise ValueError(f"rejected or unsupported lineage nodes cannot have children: {continued!r}")
+        if non_terminal := sorted(node_id for node_id in self.terminal_node_ids if children[node_id]):
+            raise ValueError(f"artifact lineage terminal nodes cannot have children: {non_terminal!r}")
+        leaf_ids = {node_id for node_id, node_children in children.items() if not node_children}
+        if set(self.terminal_node_ids) != leaf_ids:
+            raise ValueError("artifact lineage terminal_node_ids must contain every leaf node exactly once")
+
+        boundary_rank = _LINEAGE_STAGE_ORDER[self.evidence_boundary]
+        maximum_rank = max(_LINEAGE_STAGE_ORDER[node.stage] for node in self.nodes)
+        if boundary_rank != maximum_rank:
+            raise ValueError("artifact lineage evidence_boundary must match the furthest recorded stage")
+        required_stages = {"source"}
+        ordered_requirements = (
+            ("candidate", {"calibration", "golden", "recipe", "candidate"}),
+            ("export", {"export"}),
+            ("compiler", {"compiler"}),
+            ("benchmark", {"benchmark"}),
+            ("server_client", {"server_client"}),
+            ("closed_loop", {"closed_loop"}),
+            ("promotion", {"promotion"}),
+        )
+        for stage, requirements in ordered_requirements:
+            if boundary_rank >= _LINEAGE_STAGE_ORDER[stage]:
+                required_stages.update(requirements)
+        stages = {node.stage for node in self.nodes}
+        if missing := sorted(required_stages - stages, key=_LINEAGE_STAGE_ORDER.__getitem__):
+            raise ValueError(f"artifact lineage is missing required stages: {missing!r}")
+
+        terminal_statuses = {nodes[node_id].status for node_id in self.terminal_node_ids}
+        expected_status = (
+            "rejected" if terminal_statuses & {"rejected", "unsupported"} else "pending" if "pending" in terminal_statuses else "measured"
+        )
+        if self.status == "accepted":
+            if self.evidence_boundary != "promotion" or self.human_acceptance != "accepted" or expected_status != "measured":
+                raise ValueError("accepted artifact lineage requires measured promotion evidence and human_acceptance=accepted")
+        elif self.status != expected_status:
+            raise ValueError(f"artifact lineage status must be {expected_status!r} for its terminal nodes")
+        if self.human_acceptance == "accepted" and self.status != "accepted":
+            raise ValueError("human_acceptance=accepted requires status=accepted")
+        if self.human_acceptance == "rejected" and self.status != "rejected":
+            raise ValueError("human_acceptance=rejected requires status=rejected")
+        if self.lineage_hash is not None and self.lineage_hash != artifact_lineage_hash(self):
+            raise ValueError("lineage_hash does not match ArtifactLineageManifest identity")
+        return self
+
+
+def artifact_lineage_hash(manifest: ArtifactLineageManifest) -> str:
+    """Hash an artifact lineage without recursively including lineage_hash."""
+
+    payload = manifest.model_dump(mode="json", exclude={"lineage_hash"})
+    payload["nodes"] = sorted(
+        ({**node, "parent_ids": sorted(node["parent_ids"])} for node in payload["nodes"]),
+        key=lambda node: node["node_id"],
+    )
+    payload["terminal_node_ids"] = sorted(payload["terminal_node_ids"])
+    return fingerprint(payload)
+
+
+def resolve_artifact_lineage(manifest: ArtifactLineageManifest) -> ArtifactLineageManifest:
+    """Return a lineage with its canonical hash populated."""
+
+    digest = artifact_lineage_hash(manifest)
+    return manifest if manifest.lineage_hash == digest else manifest.model_copy(update={"lineage_hash": digest})
+
+
 class TargetCapability(Contract):
     """One target feature probe with an explicit support state."""
 
@@ -1670,6 +1833,16 @@ def load_deployment_manifest(path: str | Path) -> DeploymentCandidateManifest:
     """Load a target compiler handoff manifest without importing target runtimes."""
 
     return DeploymentCandidateManifest.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
+
+def load_artifact_lineage(path: str | Path) -> ArtifactLineageManifest:
+    """Load JSON or YAML artifact lineage through the stable public schema."""
+
+    source = Path(path)
+    data = yaml.safe_load(source.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"artifact lineage must be a mapping: {source}")
+    return ArtifactLineageManifest.model_validate(data)
 
 
 def fingerprint(value: Any) -> str:

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -5,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from piquant.contracts import (
+    ArtifactLineageManifest,
+    ArtifactLineageNode,
     ArtifactRef,
     BenchmarkProtocol,
     CompilationPlan,
@@ -16,7 +19,12 @@ from piquant.contracts import (
     TargetFingerprint,
     load_compilation_plan,
 )
-from piquant.deployment import latency_distribution, summarize_deployment_manifest
+from piquant.deployment import (
+    latency_distribution,
+    summarize_deployment_manifest,
+    validate_artifact_lineage,
+    write_artifact_lineage,
+)
 from piquant.inspection import inspect_onnx_model
 from piquant.integrations import TensorRTCliCompiler, build_trtexec_command, summarize_tensorrt_layers
 
@@ -40,6 +48,12 @@ def _model() -> ModelSpec:
 
 def _source() -> ArtifactRef:
     return ArtifactRef(kind="candidate-onnx", path="/external/candidate.onnx", sha256="0" * 64)
+
+
+def _file_artifact(tmp_path: Path, name: str) -> ArtifactRef:
+    path = tmp_path / name
+    path.write_text(name, encoding="utf-8")
+    return ArtifactRef(kind=name, path=str(path), sha256=hashlib.sha256(name.encode()).hexdigest())
 
 
 def test_v04_compilation_plan_recipe_loads_through_schema() -> None:
@@ -83,6 +97,42 @@ def test_latency_and_deployment_manifest_preserve_acceptance_boundary() -> None:
     assert summary["precisions"] == ["fp16", "int8"]
     with pytest.raises(ValueError, match="human_acceptance=accepted"):
         DeploymentCandidateManifest(manifest_id="bad", status="accepted", model=_model(), target=_target())
+
+
+def test_v10_artifact_lineage_write_and_hash_validation_are_offline(tmp_path: Path) -> None:
+    source = _file_artifact(tmp_path, "source")
+    calibration = _file_artifact(tmp_path, "calibration")
+    golden = _file_artifact(tmp_path, "golden")
+    recipe = _file_artifact(tmp_path, "recipe")
+    candidate = _file_artifact(tmp_path, "candidate")
+    manifest = ArtifactLineageManifest(
+        manifest_id="candidate-lineage",
+        model=_model(),
+        candidate_id="candidate",
+        nodes=[
+            ArtifactLineageNode(node_id="source", stage="source", artifact=source, status="measured"),
+            ArtifactLineageNode(node_id="calibration", stage="calibration", artifact=calibration, parent_ids=["source"], status="measured"),
+            ArtifactLineageNode(node_id="golden", stage="golden", artifact=golden, parent_ids=["calibration"], status="measured"),
+            ArtifactLineageNode(node_id="recipe", stage="recipe", artifact=recipe, parent_ids=["golden"], status="measured"),
+            ArtifactLineageNode(
+                node_id="candidate", stage="candidate", artifact=candidate, parent_ids=["recipe", "golden"], status="measured"
+            ),
+        ],
+        terminal_node_ids=["candidate"],
+        evidence_boundary="candidate",
+        status="measured",
+    )
+    path = tmp_path / "lineage.json"
+    write_artifact_lineage(manifest, path)
+    summary = validate_artifact_lineage(path, check_artifacts=True)
+    assert summary["lineage_hash"]
+    assert summary["node_count"] == 5
+    assert summary["stages"] == ["source", "calibration", "golden", "recipe", "candidate"]
+    assert summary["human_acceptance"] == "pending"
+
+    Path(candidate.path).write_text("tampered", encoding="utf-8")
+    with pytest.raises(ValueError, match="lineage artifact SHA256 differs"):
+        validate_artifact_lineage(path, check_artifacts=True)
 
 
 def test_tensorrt_command_and_layer_summary_are_offline(tmp_path: Path) -> None:

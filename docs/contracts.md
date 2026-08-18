@@ -146,3 +146,35 @@ The FP control is a comparator and is not rejected by optimization constraints.
 Broad and manual controls remain in the target experiment matrix when a source
 constraint rejects them, while generated search candidates must pass the source
 gate before consuming compiler budget.
+
+## Artifact lineage contract
+
+`ArtifactLineageNode` binds one immutable `ArtifactRef` to a named production
+stage, direct parent IDs, and a pending/measured/rejected/unsupported status.
+Source nodes are roots; every later node has at least one known parent at an
+earlier stage. Rejected and unsupported nodes are terminal and cannot be used
+as parents for later evidence. Node IDs, parent IDs, and terminal IDs are unique.
+
+`ArtifactLineageManifest` represents the complete directed lineage:
+
+```text
+source -> calibration -> golden -> recipe -> candidate
+       -> export -> compiler -> benchmark
+       -> server_client -> closed_loop -> promotion
+```
+
+The graph may branch for multi-engine or multi-target packages. Its declared
+`evidence_boundary` must equal the furthest recorded stage, and candidate or
+later boundaries require all preceding semantic stages. Terminal-node statuses
+derive the manifest status. `accepted` requires measured promotion evidence
+and `human_acceptance=accepted`; no machine-only node can assign acceptance.
+
+`artifact_lineage_hash` canonicalizes node order, parent order, and terminal
+order before hashing, so serialization order does not change identity.
+`resolve_artifact_lineage` fills that hash, while an incorrect supplied hash
+fails validation. `piquant validate-lineage` validates schema and graph
+identity; `--check-artifacts` also rehashes every referenced local file.
+
+The package version is independent of these embedded schema versions. v1.0
+keeps all existing contracts at `schema_version=1` and adds lineage contracts
+without reinterpreting older records.

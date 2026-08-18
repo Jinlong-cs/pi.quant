@@ -10,6 +10,27 @@ deployment claim. It makes every candidate traceable from an immutable model
 and calibration contract through named intermediate tensors, action behavior,
 module coverage, artifacts, and an explicit evidence boundary.
 
+## v1.0 stable control plane
+
+v1.0 freezes the lightweight public control-plane surface without turning
+pi.quant into a model runtime or plugin registry:
+
+- existing schema-version-1 recipes, manifests, evidence, search plans, and
+  promotion plans remain readable;
+- `ArtifactLineageManifest` records a hash-stable source, calibration, golden,
+  recipe, candidate, export, compiler, benchmark, server/client, closed-loop,
+  and promotion graph;
+- lineage validation rejects unknown parents, backward stage edges, incomplete
+  evidence boundaries, status mismatches, and machine-assigned acceptance;
+- `piquant validate-lineage` can additionally verify every referenced local
+  artifact SHA256 without importing an optional model or compiler runtime;
+- release CI covers every declared Python minor version and installs the built
+  wheel into a clean environment before exercising the CLI.
+
+Package semantic versions and contract schema versions are independent. A
+`1.0.0` package does not rewrite existing `schema_version: 1` records. Merging
+or publishing the library also does not accept a deployment candidate.
+
 ## v0.2
 
 v0.2 adds a real Pi0.5/LIBERO source-level vertical workflow:
@@ -50,6 +71,7 @@ closed-loop success, or accepted deployment.
 
 ```bash
 uv sync --extra dev
+uv run piquant --version
 uv run piquant doctor
 uv run piquant validate-plan recipes/synthetic/flow-vla-int8.yaml
 ```
@@ -203,6 +225,13 @@ uv run piquant promote /external/artifacts/candidate.json \
   --search-plan /external/artifacts/search-plan.json
 ```
 
+Validate a complete production lineage independently of model/runtime imports:
+
+```bash
+uv run piquant validate-lineage /external/artifacts/artifact-lineage.json
+uv run piquant validate-lineage /external/artifacts/artifact-lineage.json --check-artifacts
+```
+
 ## Architecture
 
 ```text
@@ -220,6 +249,8 @@ ModelAdapter + CalibrationProvider + semantic inventory
 Read [docs/architecture.md](docs/architecture.md), [docs/contracts.md](docs/contracts.md),
 [docs/modelopt-backend.md](docs/modelopt-backend.md), and
 [docs/target-compiler.md](docs/target-compiler.md) for the public boundaries.
+[docs/release.md](docs/release.md) defines the v1.0 compatibility, support,
+build, review, tag, and publication gates.
 Agent workflows live under `.agents/`; the root `AGENTS.md` is the repository
 coding policy copied from the project-level policy source.
 

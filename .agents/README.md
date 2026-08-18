@@ -38,3 +38,12 @@ target-local cost, explicit budgets, and matched FP/broad/manual controls.
 Source and target Pareto fronts are distinct. Gate40/full400 require external
 approval, and no agent or machine record can assign human acceptance. Keep
 plans, candidates, experiment runners, manifests, and results outside Git.
+
+v1.0 freezes the additive public control-plane surface and introduces a
+hash-stable artifact-lineage graph. Lineage nodes must use known earlier-stage
+parents, complete the declared evidence boundary, preserve terminal rejection
+or pending states, and require explicit human acceptance for an accepted
+promotion lineage. `validate-lineage` is offline validation, not permission to
+run a model, compiler, runtime, simulator, or promotion gate. Package release,
+deployment-candidate acceptance, merge, tag, and publication remain separate
+human decisions.

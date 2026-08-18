@@ -43,6 +43,10 @@ candidate, and the analyzer/evidence layers preserve comparable results.
 - `piquant.promotion` creates an ordered pending-first gate plan from a measured
   FP target control and non-dominated target candidate. It validates evidence
   transitions but does not run pi.cpp, a simulator, Gate40, or full400.
+- `ArtifactLineageManifest` is the final control-plane envelope. It links
+  hashed source, calibration, golden, recipe, candidate, export, compiler,
+  benchmark, runtime, closed-loop, and promotion records without owning any of
+  those executors.
 
 There is no automatic backend/model registry. The caller explicitly injects
 the adapter, providers, backend, analyzer, evaluator, and store. This prevents
@@ -115,6 +119,23 @@ calibration | sensitivity | search-validation | promotion-reserved
                      human acceptance
 ```
 
+The v1.0 production handoff adds one hash-stable graph around those records:
+
+```text
+ArtifactLineageNode[]
+        |
+known earlier-stage parents + terminal nodes
+        |
+furthest evidence boundary + canonical lineage hash
+        |
+optional local artifact SHA256 verification
+        |
+external runtime or human consumer
+```
+
+Lineage validation is offline control-plane work. It does not load a model,
+compile an engine, benchmark a target, execute pi.cpp, or promote a candidate.
+
 ## Stable identities
 
 Recipes select semantic logical IDs such as `vlm.block.09.attention.q`; the
@@ -134,5 +155,5 @@ real candidate backend. ORT is a temporary-graph capture integration, not a
 quantizer. FastWAM temporal execution is an explicit optional source
 integration; it does not imply a world model is available. TensorRT compilation
 is now a target evidence layer, but pi.cpp runtime packaging, server/client
-operation, full closed loop, and human acceptance remain outside both the
-compiler and search boundaries.
+operation, full closed loop, and human acceptance remain outside the compiler,
+search, and lineage boundaries.
